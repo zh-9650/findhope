@@ -76,7 +76,7 @@
       <button class="tab-btn" id="tabBtn-rejections" onclick="switchTab('rejections')">🩺 被拒原因收集与复盘 (<span id="tabRejectionCount">0</span>)</button>
       <button class="tab-btn" id="tabBtn-postings" onclick="switchTab('postings')">职位池与匹配决策</button>
       <button class="tab-btn" id="tabBtn-logs" onclick="switchTab('logs')">实时调度日志流</button>
-      <button class="tab-btn" id="tabBtn-config" onclick="switchTab('config')">求职画像与规则配置</button>
+      <button class="tab-btn" id="tabBtn-config" onclick="switchTab('config')">求职画像与模型配置</button>
     </nav>
 
     <!-- 主内容区域 -->
@@ -162,31 +162,23 @@
         </div>
       </div>
 
-      <!-- 职位池 -->
+      <!-- 职位池与评估 -->
       <div id="tab-postings" class="tab-pane">
         <div class="pane-header">
           <div>
-            <h2>全景职位池与 Claude 匹配评级</h2>
-            <span class="pane-desc">展示所有通过 Ego 搜索采集并经两级漏斗评估的岗位</span>
+            <h2>已扫描岗位库与智能评估决策</h2>
+            <span class="pane-desc">展示所有从搜索页采集并经快照清洗、Claude 评估的职位记录</span>
           </div>
-          <div class="filter-group">
-            <select id="postingFilter" onchange="filterPostings(this.value)">
-              <option value="ALL">全部评级</option>
-              <option value="MATCH">仅 MATCH (匹配)</option>
-              <option value="REVIEW">仅 REVIEW (待核验)</option>
-              <option value="REJECT">仅 REJECT (淘汰)</option>
-            </select>
-            <button class="btn btn-sm" onclick="loadPostings()">刷新列表</button>
-          </div>
+          <button class="btn btn-sm" onclick="loadPostings()">刷新职位库</button>
         </div>
         <div class="table-container">
           <table class="data-table">
             <thead>
               <tr>
                 <th>职位名称</th>
-                <th>公司 / HR</th>
+                <th>公司</th>
                 <th>薪资</th>
-                <th>HR 活跃标签</th>
+                <th>HR活跃度</th>
                 <th>评级</th>
                 <th>匹配得分</th>
                 <th>判定理由 / 命中断言</th>
@@ -213,12 +205,52 @@
         </div>
       </div>
 
-      <!-- 求职配置 -->
+      <!-- 求职配置与模型设置 -->
       <div id="tab-config" class="tab-pane">
         <div class="pane-header">
-          <h2>求职者画像与硬性规则设置</h2>
+          <div>
+            <h2>系统配置中心：AI 决策模型与求职者画像</h2>
+            <span class="pane-desc">配置将直接持久化至 .env 与运行时内存，无需重启即刻热更新生效</span>
+          </div>
         </div>
         <form id="configForm" onsubmit="saveConfig(event)" class="config-form">
+          <!-- AI 大脑与网关配置卡片 -->
+          <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #38bdf8; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h3 style="margin:0; font-size:15px; color:#38bdf8; display:flex; align-items:center; gap:8px;">
+                <span>🧠 AI 决策大脑模型与网关设置</span>
+                <span id="activeModelTag" class="badge badge-match" style="font-size:11px;">加载中...</span>
+              </h3>
+              <button type="button" class="btn btn-sm" onclick="refreshGatewayModels()" title="拉取网关支持的最新可用模型列表">
+                🔄 刷新/检测网关模型
+              </button>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:2;">
+                <label>选择 AI 决策模型：</label>
+                <div style="display:flex; gap:8px;">
+                  <select id="cfgModelSelect" onchange="onModelSelectChange(this.value)" style="flex:1; padding:9px; background:#0b1329; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
+                    <option value="cangjie-agent">cangjie-agent (推荐 / 稳定畅通)</option>
+                    <option value="cangjie-code">cangjie-code (注意: 易受上游Token配额限制)</option>
+                    <option value="cangjie-code-flash">cangjie-code-flash</option>
+                    <option value="custom">✍️ 手动输入自定义模型名称...</option>
+                  </select>
+                  <input type="text" id="cfgModelCustom" placeholder="输入自定义模型名" style="flex:1; display:none; background:#0b1329; border:1px solid #38bdf8;" />
+                </div>
+              </div>
+
+              <div class="form-group" style="flex:1.5;">
+                <label>网关 Base URL：</label>
+                <input type="text" id="cfgModelBaseUrl" placeholder="http://192.168.31.86:30247" style="background:#0b1329;" />
+              </div>
+            </div>
+            <div style="font-size:12px; color:#94a3b8; margin-top:6px;">
+              💡 提示：保存后后台 Claude CLI 将实时切换使用该模型，并同步持久化写入本地 <code style="color:#e2e8f0;">.env</code>。
+            </div>
+          </div>
+
+          <!-- 求职画像表单 -->
           <div class="form-row">
             <div class="form-group">
               <label>求职者姓名：</label>
@@ -250,7 +282,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>目前当前薪资：</label>
-              <input type="text" id="cfgCurrentSalary" placeholder="例如: 6K" required>
+              <input type="text" id="cfgCurrentSalary" placeholder="例如: 4.5K" required>
             </div>
             <div class="form-group">
               <label>期望薪资区间 (K)：</label>
@@ -292,7 +324,7 @@
             <label>个人真实简历核心亮点摘要：</label>
             <textarea id="cfgResume" rows="3" required></textarea>
           </div>
-          <button type="submit" class="btn btn-primary">保存并升级配置版本</button>
+          <button type="submit" class="btn btn-primary">保存并升级配置（热更新生效）</button>
         </form>
       </div>
     </main>

@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config } from '../config/index.js';
+import { config, updateEnvFile, maskToken } from '../config/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -234,15 +234,103 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
       return sendJson({ postings: rows });
     }
 
+    // --- 模型列表查询 ---
+    if (pathname === '/api/models' && method === 'GET') {
+      let availableModels = [];
+      try {
+        const targetUrl = `${config.anthropicBaseUrl.replace(/\/+$/, '')}/v1/models`;
+        const resp = await fetch(targetUrl, {
+          headers: {
+            'Authorization': `Bearer ${config.anthropicAuthToken || 'sk-test'}`
+          },
+          signal: AbortSignal.timeout(3500)
+        });
+        if (resp.ok) {
+          const bodyData = await resp.json();
+          if (Array.isArray(bodyData.data)) {
+            availableModels = bodyData.data.map(m => m.id);
+          }
+        }
+      } catch (err) {
+        // 请求超时或网关不可达，使用推荐备用模型列表
+      }
+
+      if (availableModels.length === 0) {
+        availableModels = [
+          'cangjie-agent',
+          'cangjie-code',
+          'cangjie-code-flash',
+          'claude-3-5-sonnet-20241022'
+        ];
+      }
+
+      // 确保当前活跃模型在列表中
+      const cur = config.anthropicModel.replace(/\[1m\]/i, '');
+      if (!availableModels.includes(cur)) {
+        availableModels.unshift(cur);
+      }
+
+      return sendJson({
+        success: true,
+        models: availableModels,
+        activeModel: config.anthropicModel,
+        baseUrl: config.anthropicBaseUrl
+      });
+    }
+
+    // --- 配置获取与更新 ---
     if (pathname === '/api/config' && method === 'GET') {
-      return sendJson({ config: config.candidateProfile });
+      return sendJson({
+        config: config.candidateProfile,
+        modelSettings: {
+          activeModel: config.anthropicModel,
+          baseUrl: config.anthropicBaseUrl,
+          maskedToken: maskToken(config.anthropicAuthToken)
+        }
+      });
     }
 
     if (pathname === '/api/config' && method === 'POST') {
       const body = await readBody();
-      Object.assign(config.candidateProfile, body);
+      const envUpdates = {};
+
+      // 更新求职者画像
+      if (body.candidateProfile) {
+        Object.assign(config.candidateProfile, body.candidateProfile);
+      } else if (!body.modelSettings) {
+        Object.assign(config.candidateProfile, body);
+      }
+
+      // 更新模型与网关设置
+      if (body.modelSettings) {
+        if (body.modelSettings.activeModel && body.modelSettings.activeModel !== config.anthropicModel) {
+          const oldModel = config.anthropicModel;
+          config.anthropicModel = body.modelSettings.activeModel.trim();
+          envUpdates.ANTHROPIC_DEFAULT_SONNET_MODEL = config.anthropicModel;
+          db.logEvent("CONFIG", `AI 决策模型已从 ${oldModel} 热切换为: ${config.anthropicModel}`, "SUCCESS");
+        }
+        if (body.modelSettings.baseUrl && body.modelSettings.baseUrl !== config.anthropicBaseUrl) {
+          config.anthropicBaseUrl = body.modelSettings.baseUrl.trim();
+          envUpdates.ANTHROPIC_BASE_URL = config.anthropicBaseUrl;
+          db.logEvent("CONFIG", `AI 网关地址已更新为: ${config.anthropicBaseUrl}`, "INFO");
+        }
+      }
+
+      if (Object.keys(envUpdates).length > 0) {
+        updateEnvFile(envUpdates);
+      }
+
       db.logEvent("CONFIG", `求职者画像与硬性规则已由控制台更新并生效`, "SUCCESS");
-      return sendJson({ success: true, config: config.candidateProfile });
+
+      return sendJson({
+        success: true,
+        config: config.candidateProfile,
+        modelSettings: {
+          activeModel: config.anthropicModel,
+          baseUrl: config.anthropicBaseUrl,
+          maskedToken: maskToken(config.anthropicAuthToken)
+        }
+      });
     }
 
     // --- 静态文件托管 (public) ---

@@ -33,6 +33,25 @@ export function maskToken(token) {
   return `${token.slice(0, 3)}***${token.slice(-4)}`;
 }
 
+/**
+ * 动态更新并持久化环境变量到 .env 文件
+ */
+export function updateEnvFile(updates = {}) {
+  const envPath = path.join(ROOT_DIR, '.env');
+  if (!fs.existsSync(envPath)) return;
+  let content = fs.readFileSync(envPath, 'utf8');
+  for (const [key, val] of Object.entries(updates)) {
+    const regex = new RegExp(`^${key}=.*$`, 'm');
+    if (regex.test(content)) {
+      content = content.replace(regex, `${key}=${val}`);
+    } else {
+      content += `\n${key}=${val}`;
+    }
+    process.env[key] = String(val);
+  }
+  fs.writeFileSync(envPath, content, 'utf8');
+}
+
 export const config = {
   rootDir: ROOT_DIR,
   port: parseInt(process.env.PORT || '3456', 10),

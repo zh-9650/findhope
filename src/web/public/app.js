@@ -256,12 +256,73 @@ async function loadFollowups() {
   }
 }
 
+// --- 模型选择逻辑 ---
+function onModelSelectChange(val) {
+  const customInput = document.getElementById('cfgModelCustom');
+  if (val === 'custom') {
+    if (customInput) {
+      customInput.style.display = 'block';
+      customInput.focus();
+    }
+  } else {
+    if (customInput) customInput.style.display = 'none';
+  }
+}
+
+async function refreshGatewayModels(selectModel = null) {
+  const select = document.getElementById('cfgModelSelect');
+  const tag = document.getElementById('activeModelTag');
+  if (!select) return;
+
+  try {
+    const res = await fetch('/api/models');
+    const data = await res.json();
+    if (data.models && data.models.length > 0) {
+      const active = selectModel || data.activeModel || 'cangjie-agent';
+      if (tag) tag.innerText = `当前生效: ${active}`;
+
+      let html = '';
+      let found = false;
+      for (const m of data.models) {
+        const isSel = (m === active);
+        if (isSel) found = true;
+        let label = m;
+        if (m === 'cangjie-agent') label = 'cangjie-agent (推荐 / 稳定畅通)';
+        else if (m === 'cangjie-code') label = 'cangjie-code (注意: 易受Token配额限制)';
+        html += `<option value="${m}" ${isSel ? 'selected' : ''}>${label}</option>`;
+      }
+
+      const customInput = document.getElementById('cfgModelCustom');
+      if (!found && active) {
+        html += `<option value="${active}" selected>${active} (当前配置)</option>`;
+      }
+      html += `<option value="custom">✍️ 手动输入自定义模型名称...</option>`;
+      select.innerHTML = html;
+
+      if (customInput) customInput.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('拉取网关模型列表失败:', err);
+  }
+}
+
 async function loadConfig() {
   try {
     const res = await fetch('/api/config');
     const data = await res.json();
-    const c = data.config;
+    const c = data.config || {};
+    const ms = data.modelSettings || {};
 
+    // 回填模型与网关设置
+    if (document.getElementById('cfgModelBaseUrl')) {
+      document.getElementById('cfgModelBaseUrl').value = ms.baseUrl || 'http://192.168.31.86:30247';
+    }
+    const currentModel = ms.activeModel || 'cangjie-agent';
+    const tag = document.getElementById('activeModelTag');
+    if (tag) tag.innerText = `当前生效: ${currentModel}`;
+    await refreshGatewayModels(currentModel);
+
+    // 回填求职者画像设置
     document.getElementById('cfgName').value = c.name || '';
     if (document.getElementById('cfgEducation')) document.getElementById('cfgEducation').value = c.education || '全日制专升本';
     document.getElementById('cfgYears').value = c.yearsOfExperience || 0;
@@ -284,7 +345,14 @@ async function loadConfig() {
 
 async function saveConfig(e) {
   e.preventDefault();
-  const payload = {
+
+  // 获取模型设置
+  const selVal = document.getElementById('cfgModelSelect') ? document.getElementById('cfgModelSelect').value : 'cangjie-agent';
+  const customVal = document.getElementById('cfgModelCustom') ? document.getElementById('cfgModelCustom').value.trim() : '';
+  const chosenModel = (selVal === 'custom' && customVal) ? customVal : selVal;
+  const baseUrl = document.getElementById('cfgModelBaseUrl') ? document.getElementById('cfgModelBaseUrl').value.trim() : 'http://192.168.31.86:30247';
+
+  const candidateProfile = {
     name: document.getElementById('cfgName').value.trim(),
     education: document.getElementById('cfgEducation') ? document.getElementById('cfgEducation').value.trim() : '全日制专升本',
     yearsOfExperience: parseInt(document.getElementById('cfgYears').value, 10),
@@ -302,13 +370,31 @@ async function saveConfig(e) {
     resumeSummary: document.getElementById('cfgResume').value.trim()
   };
 
-  await fetch('/api/config', {
+  const payload = {
+    candidateProfile,
+    modelSettings: {
+      activeModel: chosenModel,
+      baseUrl
+    }
+  };
+
+  const res = await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
+  const data = await res.json();
 
-  alert('配置保存成功并已动态生效！');
+  if (data.success) {
+    const tag = document.getElementById('activeModelTag');
+    if (tag && data.modelSettings) {
+      tag.innerText = `当前生效: ${data.modelSettings.activeModel}`;
+    }
+    alert(`🎉 配置保存成功！AI 决策模型已切换为 [${chosenModel}] 并热更新生效！`);
+  } else {
+    alert('保存失败，请检查网络或日志');
+  }
+
   fetchStatus();
 }
 
