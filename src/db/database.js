@@ -62,19 +62,6 @@ export class AgentDatabase {
         chat_suggestions TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-
-      CREATE TABLE IF NOT EXISTS model_presets (
-        preset_id TEXT PRIMARY KEY,
-        preset_name TEXT NOT NULL,
-        provider_type TEXT DEFAULT 'anthropic_compatible',
-        base_url TEXT NOT NULL,
-        api_key TEXT NOT NULL,
-        model_name TEXT NOT NULL,
-        timeout_seconds INTEGER DEFAULT 180,
-        is_active INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
     `);
 
     // 增量添加 conversations 表的“已读未回/送达”定时二次评估与跟进字段
@@ -89,24 +76,6 @@ export class AgentDatabase {
     ];
     for (const alterSql of convAlterCols) {
       try { this.db.exec(alterSql); } catch (e) { /* 字段已存在则忽略 */ }
-    }
-
-    // 初始化模型预设种子数据（若为空）
-    try {
-      const row = this.db.prepare(`SELECT count(*) as count FROM model_presets`).get();
-      if (!row || row.count === 0) {
-        const defaultToken = process.env.ANTHROPIC_AUTH_TOKEN || '';
-        const defaultUrl = process.env.ANTHROPIC_BASE_URL || 'http://192.168.31.86:30247';
-        this.db.prepare(`
-          INSERT INTO model_presets (preset_id, preset_name, base_url, api_key, model_name, timeout_seconds, is_active)
-          VALUES 
-          ('preset_cangjie_agent', '本地网关 - 仓颉Agent (稳定推荐)', ?, ?, 'cangjie-agent', 180, 1),
-          ('preset_cangjie_code', '本地网关 - 仓颉Code', ?, ?, 'cangjie-code', 180, 0),
-          ('preset_custom_cloud', '外部独立 API / 自定义模型与Key', 'https://api.anthropic.com', '', 'claude-3-5-sonnet-20241022', 180, 0)
-        `).run(defaultUrl, defaultToken, defaultUrl, defaultToken);
-      }
-    } catch (e) {
-      console.warn("Init model presets warning:", e.message);
     }
   }
 
@@ -475,7 +444,6 @@ export class AgentDatabase {
   }
 
   getNextTask() {
-    // 优先取 YIELDED 检查点恢复任务，其次按 priority 倒序取 QUEUED 任务
     const stmt = this.db.prepare(`
       SELECT * FROM tasks
       WHERE status IN ('QUEUED', 'YIELDED')
@@ -490,7 +458,6 @@ export class AgentDatabase {
     const now = Date.now();
     const expiresAt = new Date(now + ttlMs).toISOString();
 
-    // 先清理或检查已过期的锁
     const current = this.db.prepare(`SELECT * FROM actor_leases WHERE resource_name = ?`).get(resourceName);
 
     if (!current) {
@@ -503,7 +470,6 @@ export class AgentDatabase {
 
     const currentExpires = new Date(current.expires_at).getTime();
     if (current.holder_id === holderId) {
-      // 自身续约
       this.db.prepare(`
         UPDATE actor_leases
         SET expires_at = ?, fencing_token = fencing_token + 1
@@ -513,7 +479,6 @@ export class AgentDatabase {
     }
 
     if (now > currentExpires) {
-      // 锁已超时过期 (僵尸锁自动接管)
       this.db.prepare(`
         UPDATE actor_leases
         SET holder_id = ?, expires_at = ?, fencing_token = fencing_token + 1
@@ -522,7 +487,6 @@ export class AgentDatabase {
       return { acquired: true, token: current.fencing_token + 1 };
     }
 
-    // 锁仍有效且被其他人持有
     return { acquired: false, holder: current.holder_id, remainingMs: currentExpires - now };
   }
 
@@ -718,53 +682,5 @@ export class AgentDatabase {
     try { row.resume_suggestions = JSON.parse(row.resume_suggestions || '[]'); } catch { row.resume_suggestions = []; }
     try { row.chat_suggestions = JSON.parse(row.chat_suggestions || '[]'); } catch { row.chat_suggestions = []; }
     return row;
-  }
-
-  // --- 12. 多模型预设池管理 ---
-  getModelPresets() {
-    return this.db.prepare(`SELECT * FROM model_presets ORDER BY is_active DESC, updated_at DESC`).all();
-  }
-
-  saveModelPreset(preset) {
-    const presetId = preset.preset_id || `preset_${Date.now()}`;
-    const stmt = this.db.prepare(`
-      INSERT INTO model_presets (
-        preset_id, preset_name, provider_type, base_url, api_key, model_name, timeout_seconds, is_active, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(preset_id) DO UPDATE SET
-        preset_name = excluded.preset_name,
-        provider_type = excluded.provider_type,
-        base_url = excluded.base_url,
-        api_key = CASE WHEN excluded.api_key = '' OR excluded.api_key LIKE '%***%' THEN model_presets.api_key ELSE excluded.api_key END,
-        model_name = excluded.model_name,
-        timeout_seconds = excluded.timeout_seconds,
-        is_active = excluded.is_active,
-        updated_at = CURRENT_TIMESTAMP
-    `);
-    stmt.run(
-      presetId,
-      preset.preset_name || '自定义模型配置',
-      preset.provider_type || 'anthropic_compatible',
-      preset.base_url,
-      preset.api_key || '',
-      preset.model_name,
-      preset.timeout_seconds || 180,
-      preset.is_active ? 1 : 0
-    );
-    return this.db.prepare(`SELECT * FROM model_presets WHERE preset_id = ?`).get(presetId);
-  }
-
-  activateModelPreset(presetId) {
-    this.db.prepare(`UPDATE model_presets SET is_active = 0`).run();
-    this.db.prepare(`UPDATE model_presets SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE preset_id = ?`).run(presetId);
-    return this.db.prepare(`SELECT * FROM model_presets WHERE preset_id = ?`).get(presetId);
-  }
-
-  deleteModelPreset(presetId) {
-    return this.db.prepare(`DELETE FROM model_presets WHERE preset_id = ?`).run(presetId);
-  }
-
-  getActiveModelPreset() {
-    return this.db.prepare(`SELECT * FROM model_presets WHERE is_active = 1 LIMIT 1`).get();
   }
 }

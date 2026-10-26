@@ -76,7 +76,7 @@
       <button class="tab-btn" id="tabBtn-rejections" onclick="switchTab('rejections')">🩺 被拒原因收集与复盘 (<span id="tabRejectionCount">0</span>)</button>
       <button class="tab-btn" id="tabBtn-postings" onclick="switchTab('postings')">职位池与匹配决策</button>
       <button class="tab-btn" id="tabBtn-logs" onclick="switchTab('logs')">实时调度日志流</button>
-      <button class="tab-btn" id="tabBtn-config" onclick="switchTab('config')">AI多模型与画像配置</button>
+      <button class="tab-btn" id="tabBtn-config" onclick="switchTab('config')">系统与画像配置</button>
     </nav>
 
     <!-- 主内容区域 -->
@@ -205,104 +205,61 @@
         </div>
       </div>
 
-      <!-- 求职配置与多模型/多Key配置 -->
+      <!-- 系统与画像配置 -->
       <div id="tab-config" class="tab-pane">
         <div class="pane-header">
           <div>
-            <h2>系统配置中心：AI 多模型多Key预设池与画像设置</h2>
-            <span class="pane-desc">支持独立模型、独立Base URL与独立API Key；保存后即刻热更新生效并持久化写入 .env</span>
+            <h2>系统配置中心</h2>
+            <span class="pane-desc">可任意手填自定义模型、接口网关与 API Key；配置仅保存在本地 .env，绝不向外暴露</span>
           </div>
         </div>
 
         <form id="configForm" onsubmit="saveConfig(event)" class="config-form">
-          <!-- 核心：AI 大脑多预设与多模型/Key 独立配置卡片 -->
-          <div style="background: linear-gradient(135deg, #1e293b 0%, #0b1329 100%); border: 1px solid #38bdf8; border-radius: 8px; padding: 18px; margin-bottom: 24px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
-              <div style="display:flex; align-items:center; gap:10px;">
-                <h3 style="margin:0; font-size:16px; color:#38bdf8; display:flex; align-items:center; gap:8px;">
-                  <span>🧠 AI 决策大脑配置</span>
-                </h3>
-                <span id="activeModelTag" class="badge badge-match" style="font-size:11px;">加载中...</span>
-              </div>
-              
-              <div style="display:flex; align-items:center; gap:8px;">
-                <label style="font-size:12px; color:#94a3b8; margin:0;">预设配置池：</label>
-                <select id="cfgPresetSelect" onchange="onPresetSelectChange(this.value)" style="padding:6px 10px; background:#0f172a; border:1px solid #38bdf8; border-radius:6px; color:#f8fafc; font-size:12px;">
-                  <option value="">加载预设列表中...</option>
-                </select>
-                <button type="button" class="btn btn-sm btn-primary" onclick="activateSelectedPreset()" title="立即切换并应用该预设">
-                  ⚡ 立即激活
-                </button>
-                <button type="button" class="btn btn-sm btn-danger" onclick="deleteCurrentPreset()" title="删除当前选中的自定义预设">
-                  🗑️
-                </button>
-              </div>
+          <!-- 纯粹简单的 AI 模型手填卡片 -->
+          <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #38bdf8; border-radius: 8px; padding: 18px; margin-bottom: 24px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+              <h3 style="margin:0; font-size:15px; color:#38bdf8; display:flex; align-items:center; gap:8px;">
+                <span>🧠 AI 决策模型自定义配置</span>
+              </h3>
+              <span id="activeModelTag" class="badge badge-match" style="font-size:11px;">当前生效: 加载中...</span>
             </div>
 
-            <!-- 详细配置项 -->
             <div class="form-row">
               <div class="form-group" style="flex:1.2;">
-                <label>预设别名 (用于标识渠道/提供商)：</label>
-                <input type="text" id="cfgPresetName" placeholder="例如: 本地网关-仓颉Agent / 备用Claude专线" style="background:#0f172a;" required />
+                <label>AI 模型名称 (Model ID，完全手填)：</label>
+                <input type="text" id="cfgModel" placeholder="例如: cangjie-agent 或 claude-3-5-sonnet-20241022" style="background:#0f172a;" required />
+              </div>
+
+              <div class="form-group" style="flex:1.5;">
+                <label>接口网关 Base URL：</label>
+                <input type="text" id="cfgBaseUrl" placeholder="例如: http://192.168.31.86:30247" style="background:#0f172a;" required />
               </div>
 
               <div class="form-group" style="flex:1.8;">
-                <label>AI 决策模型 (Model ID)：</label>
-                <div style="display:flex; gap:8px;">
-                  <select id="cfgModelSelect" onchange="onModelSelectChange(this.value)" style="flex:1; padding:9px; background:#0f172a; border:1px solid #334155; border-radius:6px; color:#f8fafc;">
-                    <option value="cangjie-agent">cangjie-agent (推荐 / 稳定通畅)</option>
-                    <option value="cangjie-code">cangjie-code (注意: 易受Token配额限制)</option>
-                    <option value="cangjie-code-flash">cangjie-code-flash</option>
-                    <option value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022 (官方Sonnet)</option>
-                    <option value="custom">✍️ 手动输入任意自定义模型...</option>
-                  </select>
-                  <input type="text" id="cfgModelCustom" placeholder="输入自定义 Model ID" style="flex:1; display:none; background:#0f172a; border:1px solid #38bdf8;" />
-                </div>
-              </div>
-            </div>
-
-            <div class="form-row">
-              <div class="form-group" style="flex:1.5;">
-                <label>网关 Base URL：</label>
-                <input type="text" id="cfgModelBaseUrl" placeholder="例如: http://192.168.31.86:30247 或 https://api.anthropic.com" style="background:#0f172a;" required />
-              </div>
-
-              <div class="form-group" style="flex:2;">
-                <label>API Key / Auth Token (独立鉴权凭据)：</label>
+                <label>API Key / 鉴权 Token：</label>
                 <div style="display:flex; gap:8px; align-items:center;">
-                  <input type="password" id="cfgModelApiKey" placeholder="sk-..." style="flex:1; background:#0f172a;" autocomplete="off" />
+                  <input type="password" id="cfgApiKey" placeholder="留空保持原Key，输入新内容则更新" style="flex:1; background:#0f172a;" autocomplete="off" />
                   <button type="button" class="btn btn-sm btn-outline" onclick="toggleKeyVisibility()" id="btnToggleKey" title="显示/隐藏明文">
                     👁️
                   </button>
                 </div>
               </div>
-
-              <div class="form-group" style="flex:0.6;">
-                <label>超时时间(秒)：</label>
-                <input type="number" id="cfgModelTimeout" min="30" max="600" value="180" style="background:#0f172a;" />
-              </div>
             </div>
 
-            <!-- 连通性测试反馈栏 -->
-            <div id="connTestBox" style="display:none; padding:10px 14px; border-radius:6px; font-size:12.5px; margin-bottom:12px; margin-top:4px;"></div>
+            <!-- 连通性测试反馈 -->
+            <div id="connTestBox" style="display:none; padding:10px 14px; border-radius:6px; font-size:12.5px; margin-bottom:10px; margin-top:4px;"></div>
 
-            <!-- 模型操作栏 -->
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding-top:10px; border-top:1px solid #1e293b; flex-wrap:wrap; gap:8px;">
-              <div style="font-size:12px; color:#94a3b8;">
-                💡 每个预设独立绑定对应的 <strong>模型 + 网关 URL + API Key</strong>，切换后后台 Claude CLI 立即使用新凭据与新模型！
-              </div>
-              <div style="display:flex; gap:8px;">
-                <button type="button" class="btn btn-sm btn-outline" onclick="testConnection()" id="btnTestConn">
-                  ⚡ 测试此配置连通性
-                </button>
-                <button type="button" class="btn btn-sm btn-outline" onclick="saveAsNewPreset()">
-                  ➕ 另存为新预设
-                </button>
-              </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; padding-top:10px; border-top:1px solid #1e293b;">
+              <span id="tokenStatusNotice" style="font-size:12px; color:#94a3b8;">
+                🔒 当前密钥状态: 加载中 (真实凭据仅保存在本地 .env，绝不上云或提交 Git)
+              </span>
+              <button type="button" class="btn btn-sm btn-outline" onclick="testConnection()" id="btnTestConn">
+                ⚡ 测试连通性
+              </button>
             </div>
           </div>
 
-          <!-- 求职者画像表单 -->
+          <!-- 求职者个人画像与过滤规则 -->
           <h3 style="font-size:15px; color:#f8fafc; margin-bottom:14px; border-bottom:1px solid #1e293b; padding-bottom:8px;">👤 求职者个人画像与岗位过滤规则</h3>
           <div class="form-row">
             <div class="form-group">

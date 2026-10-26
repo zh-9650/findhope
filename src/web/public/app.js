@@ -1,7 +1,5 @@
 let currentTab = 'approvals';
 let allPostingsCache = [];
-let modelPresetsCache = [];
-let activePresetId = null;
 
 async function fetchStatus() {
   try {
@@ -259,23 +257,11 @@ async function loadFollowups() {
 }
 
 // ==========================================
-// AI 多模型、多 Key、独立网关预设池系统
+// AI 模型配置（完全手填与安全测试）
 // ==========================================
 
-function onModelSelectChange(val) {
-  const customInput = document.getElementById('cfgModelCustom');
-  if (val === 'custom') {
-    if (customInput) {
-      customInput.style.display = 'block';
-      customInput.focus();
-    }
-  } else {
-    if (customInput) customInput.style.display = 'none';
-  }
-}
-
 function toggleKeyVisibility() {
-  const keyInput = document.getElementById('cfgModelApiKey');
+  const keyInput = document.getElementById('cfgApiKey');
   const btn = document.getElementById('btnToggleKey');
   if (!keyInput) return;
   if (keyInput.type === 'password') {
@@ -287,182 +273,22 @@ function toggleKeyVisibility() {
   }
 }
 
-function fillPresetForm(preset) {
-  if (!preset) return;
-  if (document.getElementById('cfgPresetName')) document.getElementById('cfgPresetName').value = preset.preset_name || '';
-  if (document.getElementById('cfgModelBaseUrl')) document.getElementById('cfgModelBaseUrl').value = preset.base_url || '';
-  if (document.getElementById('cfgModelApiKey')) document.getElementById('cfgModelApiKey').value = preset.api_key_raw || preset.api_key || '';
-  if (document.getElementById('cfgModelTimeout')) document.getElementById('cfgModelTimeout').value = preset.timeout_seconds || 180;
-
-  const select = document.getElementById('cfgModelSelect');
-  const customInput = document.getElementById('cfgModelCustom');
-  const targetModel = preset.model_name || 'cangjie-agent';
-
-  let found = false;
-  if (select) {
-    for (const opt of select.options) {
-      if (opt.value === targetModel) {
-        select.value = targetModel;
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      select.value = 'custom';
-      if (customInput) {
-        customInput.style.display = 'block';
-        customInput.value = targetModel;
-      }
-    } else {
-      if (customInput) customInput.style.display = 'none';
-    }
-  }
-}
-
-async function loadModelPresets(selectPresetId = null) {
-  try {
-    const res = await fetch('/api/model-presets');
-    const data = await res.json();
-    modelPresetsCache = data.presets || [];
-
-    const select = document.getElementById('cfgPresetSelect');
-    const tag = document.getElementById('activeModelTag');
-
-    if (data.currentRuntime && tag) {
-      tag.innerText = `当前生效: ${data.currentRuntime.activeModel}`;
-    }
-
-    if (!select) return;
-
-    if (modelPresetsCache.length === 0) {
-      select.innerHTML = '<option value="">(暂无保存的预设)</option>';
-      return;
-    }
-
-    let activePreset = modelPresetsCache.find(p => p.is_active === 1) || modelPresetsCache[0];
-    if (selectPresetId) {
-      const target = modelPresetsCache.find(p => p.preset_id === selectPresetId);
-      if (target) activePreset = target;
-    }
-    activePresetId = activePreset ? activePreset.preset_id : null;
-
-    select.innerHTML = modelPresetsCache.map(p => {
-      const isCur = (p.preset_id === activePresetId);
-      const activeTag = p.is_active ? ' [🟢当前生效]' : '';
-      return `<option value="${p.preset_id}" ${isCur ? 'selected' : ''}>${p.preset_name} (${p.model_name})${activeTag}</option>`;
-    }).join('');
-
-    fillPresetForm(activePreset);
-  } catch (err) {
-    console.error('加载模型预设失败:', err);
-  }
-}
-
-function onPresetSelectChange(presetId) {
-  activePresetId = presetId;
-  const p = modelPresetsCache.find(item => item.preset_id === presetId);
-  if (p) {
-    fillPresetForm(p);
-  }
-}
-
-async function activateSelectedPreset() {
-  const select = document.getElementById('cfgPresetSelect');
-  const presetId = select ? select.value : activePresetId;
-  if (!presetId) {
-    alert('请先选择一个预设');
-    return;
-  }
-
-  const res = await fetch(`/api/model-presets/${presetId}/activate`, { method: 'POST' });
-  const data = await res.json();
-  if (data.success) {
-    const tag = document.getElementById('activeModelTag');
-    if (tag && data.preset) {
-      tag.innerText = `当前生效: ${data.preset.model_name}`;
-    }
-    alert(`🎉 已成功激活预设 [${data.preset.preset_name}]！模型切换为 [${data.preset.model_name}]，对应网关与 Key 已热生效并回写 .env！`);
-    loadModelPresets(presetId);
-    fetchStatus();
-  } else {
-    alert('激活失败: ' + (data.error || '未知错误'));
-  }
-}
-
-async function deleteCurrentPreset() {
-  const select = document.getElementById('cfgPresetSelect');
-  const presetId = select ? select.value : activePresetId;
-  if (!presetId) return;
-
-  if (presetId === 'preset_cangjie_agent') {
-    alert('默认推荐预设不支持删除');
-    return;
-  }
-
-  if (!confirm('确定要删除当前选中的预设配置吗？')) return;
-
-  const res = await fetch(`/api/model-presets/${presetId}`, { method: 'DELETE' });
-  const data = await res.json();
-  if (data.success) {
-    alert('预设已删除');
-    loadModelPresets();
-  }
-}
-
-async function saveAsNewPreset() {
-  const selVal = document.getElementById('cfgModelSelect').value;
-  const customVal = document.getElementById('cfgModelCustom').value.trim();
-  const model_name = (selVal === 'custom' && customVal) ? customVal : selVal;
-  const base_url = document.getElementById('cfgModelBaseUrl').value.trim();
-  const api_key = document.getElementById('cfgModelApiKey').value.trim();
-  const timeout_seconds = parseInt(document.getElementById('cfgModelTimeout').value, 10) || 180;
-  const currentName = document.getElementById('cfgPresetName').value.trim();
-
-  const newName = prompt('请输入新预设的别名 (例如: 备用MiniMax专线 / 官方Claude):', currentName ? `${currentName} (副本)` : `${model_name}-配置`);
-  if (!newName) return;
-
-  const payload = {
-    preset_id: `preset_${Date.now()}`,
-    preset_name: newName,
-    model_name,
-    base_url,
-    api_key,
-    timeout_seconds,
-    is_active: 0
-  };
-
-  const res = await fetch('/api/model-presets', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const data = await res.json();
-  if (data.success) {
-    alert(`🎉 新预设 [${newName}] 已保存至预设库！`);
-    loadModelPresets(payload.preset_id);
-  } else {
-    alert('保存预设失败: ' + (data.error || '未知错误'));
-  }
-}
-
 async function testConnection() {
   const btn = document.getElementById('btnTestConn');
   const box = document.getElementById('connTestBox');
   if (!btn || !box) return;
 
-  const selVal = document.getElementById('cfgModelSelect').value;
-  const customVal = document.getElementById('cfgModelCustom').value.trim();
-  const model = (selVal === 'custom' && customVal) ? customVal : selVal;
-  const baseUrl = document.getElementById('cfgModelBaseUrl').value.trim();
-  const apiKey = document.getElementById('cfgModelApiKey').value.trim();
+  const model = document.getElementById('cfgModel').value.trim();
+  const baseUrl = document.getElementById('cfgBaseUrl').value.trim();
+  const apiKey = document.getElementById('cfgApiKey').value.trim();
 
   btn.disabled = true;
-  btn.innerText = '⏳ 正在检测...';
+  btn.innerText = '⏳ 检测中...';
   box.style.display = 'block';
   box.style.background = '#1e293b';
   box.style.border = '1px solid #475569';
   box.style.color = '#cbd5e1';
-  box.innerHTML = '正在向接口网关发起测试探针，请稍候...';
+  box.innerHTML = '正在向接口网关发起连通性探针，请稍候...';
 
   try {
     const res = await fetch('/api/models/test-connection', {
@@ -476,7 +302,7 @@ async function testConnection() {
       box.style.background = '#064e3b';
       box.style.border = '1px solid #10b981';
       box.style.color = '#a7f3d0';
-      box.innerHTML = `<strong>✅ 连通性测试通过！</strong> [耗时: ${data.latencyMs}ms] 网关运行正常，探针识别到 ${data.models?.length || 0} 个可用模型通道。`;
+      box.innerHTML = `<strong>✅ 连通性测试通过！</strong> [耗时: ${data.latencyMs}ms] 接口网关正常响应。`;
     } else {
       box.style.background = '#450a0a';
       box.style.border = '1px solid #ef4444';
@@ -490,12 +316,12 @@ async function testConnection() {
     box.innerHTML = `<strong>❌ 请求失败：</strong> ${err.message}`;
   } finally {
     btn.disabled = false;
-    btn.innerText = '⚡ 测试此配置连通性';
+    btn.innerText = '⚡ 测试连通性';
   }
 }
 
 // ==========================================
-// 求职者画像与全量配置加载/保存
+// 系统配置加载与保存
 // ==========================================
 
 async function loadConfig() {
@@ -503,9 +329,25 @@ async function loadConfig() {
     const res = await fetch('/api/config');
     const data = await res.json();
     const c = data.config || {};
+    const ms = data.modelSettings || {};
 
-    // 载入模型预设系统
-    await loadModelPresets();
+    // 回填模型设置（全文本框手填，绝不暴露明文 Key）
+    if (document.getElementById('cfgModel')) {
+      document.getElementById('cfgModel').value = ms.activeModel || '';
+    }
+    if (document.getElementById('cfgBaseUrl')) {
+      document.getElementById('cfgBaseUrl').value = ms.baseUrl || '';
+    }
+    if (document.getElementById('cfgApiKey')) {
+      document.getElementById('cfgApiKey').value = ''; // 保持空白，不输出明文
+    }
+    const tag = document.getElementById('activeModelTag');
+    if (tag) tag.innerText = `当前生效: ${ms.activeModel || '未设置'}`;
+
+    const notice = document.getElementById('tokenStatusNotice');
+    if (notice) {
+      notice.innerText = `🔒 当前密钥状态: ${ms.maskedToken ? ms.maskedToken : '未配置'} (真实密钥保存在本地 .env，绝不上云)`;
+    }
 
     // 回填求职者画像设置
     document.getElementById('cfgName').value = c.name || '';
@@ -531,14 +373,9 @@ async function loadConfig() {
 async function saveConfig(e) {
   e.preventDefault();
 
-  // 获取模型设置
-  const selVal = document.getElementById('cfgModelSelect') ? document.getElementById('cfgModelSelect').value : 'cangjie-agent';
-  const customVal = document.getElementById('cfgModelCustom') ? document.getElementById('cfgModelCustom').value.trim() : '';
-  const chosenModel = (selVal === 'custom' && customVal) ? customVal : selVal;
-  const baseUrl = document.getElementById('cfgModelBaseUrl') ? document.getElementById('cfgModelBaseUrl').value.trim() : 'http://192.168.31.86:30247';
-  const apiKey = document.getElementById('cfgModelApiKey') ? document.getElementById('cfgModelApiKey').value.trim() : '';
-  const timeoutSeconds = document.getElementById('cfgModelTimeout') ? parseInt(document.getElementById('cfgModelTimeout').value, 10) : 180;
-  const presetName = document.getElementById('cfgPresetName') ? document.getElementById('cfgPresetName').value.trim() : '当前活跃配置';
+  const chosenModel = document.getElementById('cfgModel').value.trim();
+  const baseUrl = document.getElementById('cfgBaseUrl').value.trim();
+  const apiKey = document.getElementById('cfgApiKey').value.trim();
 
   const candidateProfile = {
     name: document.getElementById('cfgName').value.trim(),
@@ -563,27 +400,9 @@ async function saveConfig(e) {
     modelSettings: {
       activeModel: chosenModel,
       baseUrl,
-      apiKey,
-      timeoutSeconds
+      apiKey: apiKey || undefined // 若为空则不覆盖本地原有 Key
     }
   };
-
-  // 同步更新保存当前预设
-  if (activePresetId) {
-    await fetch('/api/model-presets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        preset_id: activePresetId,
-        preset_name: presetName,
-        model_name: chosenModel,
-        base_url: baseUrl,
-        api_key: apiKey,
-        timeout_seconds: timeoutSeconds,
-        is_active: 1
-      })
-    });
-  }
 
   const res = await fetch('/api/config', {
     method: 'POST',
@@ -597,8 +416,12 @@ async function saveConfig(e) {
     if (tag && data.modelSettings) {
       tag.innerText = `当前生效: ${data.modelSettings.activeModel}`;
     }
-    alert(`🎉 全套配置保存成功！\n模型 [${chosenModel}]、网关 [${baseUrl}] 与 API Key 已全面热更新并写入 .env！`);
-    loadModelPresets(activePresetId);
+    const notice = document.getElementById('tokenStatusNotice');
+    if (notice && data.modelSettings) {
+      notice.innerText = `🔒 当前密钥状态: ${data.modelSettings.maskedToken ? data.modelSettings.maskedToken : '未配置'} (真实密钥保存在本地 .env，绝不上云)`;
+    }
+    document.getElementById('cfgApiKey').value = '';
+    alert(`🎉 配置保存成功！\n模型 [${chosenModel}] 与网关配置已更新并热生效！`);
   } else {
     alert('保存失败，请检查网络或日志');
   }

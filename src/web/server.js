@@ -233,87 +233,7 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
       return sendJson({ postings: rows });
     }
 
-    // --- 多模型预设与连通性接口 ---
-    if (pathname === '/api/model-presets' && method === 'GET') {
-      const list = db.getModelPresets().map(p => ({
-        ...p,
-        api_key_masked: maskToken(p.api_key),
-        api_key_raw: p.api_key
-      }));
-      return sendJson({
-        success: true,
-        presets: list,
-        currentRuntime: {
-          activeModel: config.anthropicModel,
-          baseUrl: config.anthropicBaseUrl,
-          maskedToken: maskToken(config.anthropicAuthToken)
-        }
-      });
-    }
-
-    if (pathname === '/api/model-presets' && method === 'POST') {
-      const body = await readBody();
-      if (!body.model_name || !body.base_url) {
-        return sendJson({ success: false, error: '模型名称 (model_name) 和接口网关 (base_url) 不能为空' }, 400);
-      }
-
-      const saved = db.saveModelPreset(body);
-      if (body.is_active) {
-        db.activateModelPreset(saved.preset_id);
-        config.anthropicModel = body.model_name.trim();
-        config.anthropicBaseUrl = body.base_url.trim();
-        if (body.api_key && !body.api_key.includes('***')) {
-          config.anthropicAuthToken = body.api_key.trim();
-        }
-        updateEnvFile({
-          ANTHROPIC_DEFAULT_SONNET_MODEL: config.anthropicModel,
-          ANTHROPIC_BASE_URL: config.anthropicBaseUrl,
-          ...(body.api_key && !body.api_key.includes('***') ? { ANTHROPIC_AUTH_TOKEN: config.anthropicAuthToken } : {})
-        });
-        db.logEvent("CONFIG", `已激活并保存模型预设 [${body.preset_name}] -> ${config.anthropicModel}`, "SUCCESS");
-      }
-      return sendJson({ success: true, preset: saved });
-    }
-
-    if (pathname.match(/^\/api\/model-presets\/([^/]+)\/activate$/) && method === 'POST') {
-      const presetId = pathname.split('/')[3];
-      const activated = db.activateModelPreset(presetId);
-      if (!activated) {
-        return sendJson({ success: false, error: '预设不存在' }, 404);
-      }
-
-      config.anthropicModel = activated.model_name;
-      config.anthropicBaseUrl = activated.base_url;
-      if (activated.api_key) {
-        config.anthropicAuthToken = activated.api_key;
-      }
-
-      updateEnvFile({
-        ANTHROPIC_DEFAULT_SONNET_MODEL: activated.model_name,
-        ANTHROPIC_BASE_URL: activated.base_url,
-        ANTHROPIC_AUTH_TOKEN: activated.api_key
-      });
-
-      db.logEvent("CONFIG", `一键切换生效预设: [${activated.preset_name}] (模型: ${activated.model_name}, 网关: ${activated.base_url})`, "SUCCESS");
-      return sendJson({
-        success: true,
-        preset: activated,
-        currentRuntime: {
-          activeModel: config.anthropicModel,
-          baseUrl: config.anthropicBaseUrl,
-          maskedToken: maskToken(config.anthropicAuthToken)
-        }
-      });
-    }
-
-    if (pathname.match(/^\/api\/model-presets\/([^/]+)$/) && method === 'DELETE') {
-      const presetId = pathname.split('/')[3];
-      db.deleteModelPreset(presetId);
-      db.logEvent("CONFIG", `已删除模型预设: ${presetId}`, "INFO");
-      return sendJson({ success: true });
-    }
-
-    // --- 连通性测试与模型探针 ---
+    // --- 连通性测试探针接口 ---
     if (pathname === '/api/models/test-connection' && method === 'POST') {
       const body = await readBody();
       const testBaseUrl = (body.baseUrl || config.anthropicBaseUrl || '').trim();
@@ -321,7 +241,6 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
       if (!testToken || testToken.includes('***')) {
         testToken = config.anthropicAuthToken;
       }
-      const testModel = (body.model || config.anthropicModel || '').trim();
 
       const startTime = Date.now();
       try {
@@ -342,7 +261,7 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
             status: resp.status,
             latencyMs,
             models,
-            message: `连通性测试成功 (HTTP 200, 耗时 ${latencyMs}ms)! 网关支持 ${models.length} 个模型`
+            message: `连通性测试成功 (HTTP 200, 耗时 ${latencyMs}ms)! 网关识别到 ${models.length} 个模型`
           });
         } else {
           const errText = await resp.text();
@@ -363,57 +282,13 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
       }
     }
 
-    // --- 模型列表查询 ---
-    if (pathname === '/api/models' && method === 'GET') {
-      let availableModels = [];
-      try {
-        const targetUrl = `${config.anthropicBaseUrl.replace(/\/+$/, '')}/v1/models`;
-        const resp = await fetch(targetUrl, {
-          headers: {
-            'Authorization': `Bearer ${config.anthropicAuthToken || 'sk-test'}`
-          },
-          signal: AbortSignal.timeout(3500)
-        });
-        if (resp.ok) {
-          const bodyData = await resp.json();
-          if (Array.isArray(bodyData.data)) {
-            availableModels = bodyData.data.map(m => m.id);
-          }
-        }
-      } catch (err) {
-        // 请求超时或网关不可达，使用推荐备用模型列表
-      }
-
-      if (availableModels.length === 0) {
-        availableModels = [
-          'cangjie-agent',
-          'cangjie-code',
-          'cangjie-code-flash',
-          'claude-3-5-sonnet-20241022'
-        ];
-      }
-
-      const cur = config.anthropicModel.replace(/\[1m\]/i, '');
-      if (!availableModels.includes(cur)) {
-        availableModels.unshift(cur);
-      }
-
-      return sendJson({
-        success: true,
-        models: availableModels,
-        activeModel: config.anthropicModel,
-        baseUrl: config.anthropicBaseUrl
-      });
-    }
-
-    // --- 配置获取与更新 ---
+    // --- 配置读取与更新 (纯净手填与安全脱敏) ---
     if (pathname === '/api/config' && method === 'GET') {
       return sendJson({
         config: config.candidateProfile,
         modelSettings: {
           activeModel: config.anthropicModel,
           baseUrl: config.anthropicBaseUrl,
-          apiKey: config.anthropicAuthToken,
           maskedToken: maskToken(config.anthropicAuthToken)
         }
       });
@@ -423,30 +298,31 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
       const body = await readBody();
       const envUpdates = {};
 
-      // 更新求职者画像
+      // 1. 更新求职者画像
       if (body.candidateProfile) {
         Object.assign(config.candidateProfile, body.candidateProfile);
       } else if (!body.modelSettings) {
         Object.assign(config.candidateProfile, body);
       }
 
-      // 更新模型与网关与 API Key 设置
+      // 2. 更新模型、Base URL 与 API Key（完全由用户自定义手填，杜绝泄露）
       if (body.modelSettings) {
-        if (body.modelSettings.activeModel && body.modelSettings.activeModel !== config.anthropicModel) {
+        const ms = body.modelSettings;
+        if (ms.activeModel && ms.activeModel.trim() && ms.activeModel.trim() !== config.anthropicModel) {
           const oldModel = config.anthropicModel;
-          config.anthropicModel = body.modelSettings.activeModel.trim();
+          config.anthropicModel = ms.activeModel.trim();
           envUpdates.ANTHROPIC_DEFAULT_SONNET_MODEL = config.anthropicModel;
-          db.logEvent("CONFIG", `AI 决策模型已从 ${oldModel} 热切换为: ${config.anthropicModel}`, "SUCCESS");
+          db.logEvent("CONFIG", `AI 决策模型已手动切换为: ${config.anthropicModel}`, "SUCCESS");
         }
-        if (body.modelSettings.baseUrl && body.modelSettings.baseUrl !== config.anthropicBaseUrl) {
-          config.anthropicBaseUrl = body.modelSettings.baseUrl.trim();
+        if (ms.baseUrl && ms.baseUrl.trim() && ms.baseUrl.trim() !== config.anthropicBaseUrl) {
+          config.anthropicBaseUrl = ms.baseUrl.trim();
           envUpdates.ANTHROPIC_BASE_URL = config.anthropicBaseUrl;
-          db.logEvent("CONFIG", `AI 网关地址已更新为: ${config.anthropicBaseUrl}`, "INFO");
+          db.logEvent("CONFIG", `AI 网关 Base URL 已更新为: ${config.anthropicBaseUrl}`, "INFO");
         }
-        if (body.modelSettings.apiKey && !body.modelSettings.apiKey.includes('***') && body.modelSettings.apiKey !== config.anthropicAuthToken) {
-          config.anthropicAuthToken = body.modelSettings.apiKey.trim();
+        if (ms.apiKey && ms.apiKey.trim() && !ms.apiKey.includes('***') && ms.apiKey.trim() !== config.anthropicAuthToken) {
+          config.anthropicAuthToken = ms.apiKey.trim();
           envUpdates.ANTHROPIC_AUTH_TOKEN = config.anthropicAuthToken;
-          db.logEvent("CONFIG", `AI 认证 API Key 已更新`, "SUCCESS");
+          db.logEvent("CONFIG", `AI 认证 API Key 已更新并安全写入本地 .env`, "SUCCESS");
         }
       }
 
@@ -454,7 +330,7 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
         updateEnvFile(envUpdates);
       }
 
-      db.logEvent("CONFIG", `系统画像与 AI 配置已由控制台更新并实时生效`, "SUCCESS");
+      db.logEvent("CONFIG", `系统画像与 AI 配置已保存并实时生效`, "SUCCESS");
 
       return sendJson({
         success: true,
@@ -462,7 +338,6 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
         modelSettings: {
           activeModel: config.anthropicModel,
           baseUrl: config.anthropicBaseUrl,
-          apiKey: config.anthropicAuthToken,
           maskedToken: maskToken(config.anthropicAuthToken)
         }
       });
