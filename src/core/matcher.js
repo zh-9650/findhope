@@ -40,11 +40,16 @@ export class JobMatcher {
     }
 
     // 1.2 身份与雇佣性质硬门槛（候选人是2年经验全职社招人员，绝对严禁投递实习生、在校校招、兼职、学徒等非全职岗位）
-    const internKeywords = [
+    const internTitleKeywords = [
       '实习', '实习生', 'intern', '兼职', '日结', '兼职测试', '时薪', '学徒',
-      '见习', '培训生', '管培生', '校招', '应届生', '应届', '25届', '26届', '27届', '毕业生'
+      '见习', '培训生', '管培生', '校招', '应届生', '应届', '毕业生'
     ];
-    const matchedInternKw = internKeywords.find(kw => cleanTitle.includes(kw) || cleanJd.includes(kw));
+    const matchedTitleKw = internTitleKeywords.find(kw => cleanTitle.includes(kw));
+
+    const internJdKeywords = ['实习生', '仅招实习', '在校实习', '兼职测试', '学徒工', '只招应届'];
+    const matchedJdKw = internJdKeywords.find(kw => cleanJd.includes(kw));
+
+    const matchedInternKw = matchedTitleKw || matchedJdKw;
     if (matchedInternKw) {
       const res = {
         assessment_id: `ASM_${posting_id}_v${configVersion}`,
