@@ -73,6 +73,19 @@ export class FollowupEngine {
         continue;
       }
 
+      // 防连珠炮保护：若该会话刚才（10分钟内）才刚刚由 ChatEngine 发送过正常回复（例如刚发完“考虑的，简历发您了”），本轮暂不立即追发
+      const lastCandMsg = this.db.db.prepare(`
+        SELECT scraped_at, content FROM messages
+        WHERE conversation_id = ? AND sender_type = 'CANDIDATE'
+        ORDER BY message_id DESC LIMIT 1
+      `).get(item.convId);
+      if (lastCandMsg && lastCandMsg.content && lastCandMsg.content.includes('简历发您了')) {
+        const msgTimeMs = FollowupEngine.parseSqliteUtc(lastCandMsg.scraped_at);
+        if (msgTimeMs > 0 && (nowMs - msgTimeMs) < 15 * 60 * 1000) {
+          continue;
+        }
+      }
+
       const nextCount = currentCount + 1;
 
       // 【核心规则：连续 3 次扫描均为已读未回/送达 -> 触发熔断，不再坚持，标记“无结果”】
@@ -113,7 +126,7 @@ export class FollowupEngine {
       if (!openLease.acquired) continue;
 
       try {
-        inspectRes = await this.chatSync.openAndInspectConversation(item);
+        inspectRes = await this.chatSync.openAndInspectConversation(item, item.convId);
       } catch (err) {
         this.db.logEvent("FOLLOWUP", `点开沉寂会话【${item.companyName} - ${item.hrName}】异常: ${err.message}`, "WARN");
         continue;
@@ -122,7 +135,7 @@ export class FollowupEngine {
       }
 
       // 二次确认：若点开后发现 HR 其实已经回复了，或者存在拒信，则跳过追发
-      if (!inspectRes || inspectRes.lastSender === 'HR' || this.db.getRejectionFeedback(item.convId)) {
+      if (!inspectRes || inspectRes.isLastFromHr || this.db.getRejectionFeedback(item.convId)) {
         continue;
       }
 
@@ -145,8 +158,9 @@ export class FollowupEngine {
       const jobSalary = (posting && (posting.plain_salary || posting.list_salary_raw)) || (inspectRes.jobInfo && inspectRes.jobInfo.salary) || '8-12K';
       const jdText = (posting && posting.jd_text) || `职位名称：${jobTitle}，公司：${item.companyName}，标注薪资：${jobSalary}`;
 
-      // 黑名单前置拦截（外包/驻场绝不二次追发）
-      const checkStr = `${item.companyName} ${jobTitle} ${jdText}`;
+      // 黑名单前置拦截（外包/驻场绝不二次追发；先剔除“非外包/不驻场”等否定表述）
+      const checkStr = `${item.companyName} ${jobTitle} ${jdText}`
+        .replace(/(非|不|不是|拒绝|无)(外包|派遣|驻场|外派)/g, '');
       const hitBlack = (profile.blacklistKeywords || []).find(kw => checkStr.includes(kw));
       if (hitBlack) {
         this.db.updateConversationFollowup(item.convId, {
@@ -182,7 +196,7 @@ export class FollowupEngine {
 - 岗位名称：${jobTitle} (${jobSalary})
 - 岗位详情/JD：${jdText}
 - 当前会话状态：${item.deliveryTag}（第 ${nextCount} 次被沉寂扫描命中，最多不超过 ${maxCount} 次）
-- 发送附件简历按钮状态：${inspectRes.tools ? inspectRes.tools.sendResume : 'AVAILABLE'}
+- 发送附件简历按钮状态：${inspectRes.capabilities ? inspectRes.capabilities.sendResume : 'AVAILABLE'}
 - 历史已发消息记录：
 ${historyStr || item.lastMsg}
 
@@ -205,7 +219,14 @@ ${historyStr || item.lastMsg}
   "followup_message": "若 worth_followup 为 true，输出 18~42 字的真人定制破冰话术（如结合岗位业务+我可以把简历发您看看吗？）；否则输出空字符串"
 }`;
 
-        const evalRes = await this.runner.invokeReasoning(prompt, "FOLLOWUP_EVAL");
+        const resumeAlreadySent = inspectRes.capabilities && inspectRes.capabilities.sendResume === 'COMPLETED';
+        let evalRes = null;
+        try {
+          evalRes = await this.runner.invokeReasoning(prompt, "FOLLOWUP_EVAL", 35000);
+        } catch (llmErr) {
+          this.db.logEvent("FOLLOWUP", `模型网关繁忙，采用本地高标准业务契合度引擎评估【${item.companyName} - ${item.hrName}】`, "INFO");
+          evalRes = this.localEvaluateAndDraft(jobTitle, jdText, hadOldAiGreeting, nextCount, conv.last_followup_text, resumeAlreadySent);
+        }
         const score = Number(evalRes.score) || 0;
         const worthFollowup = Boolean(evalRes.worth_followup) && score >= minScore && Boolean(evalRes.followup_message);
 
@@ -296,6 +317,73 @@ ${historyStr || item.lastMsg}
       followedUp: followedUpCount,
       markedNoResponse: markedNoResponseCount,
       skippedNotWorth: skippedNotWorthCount
+    };
+  }
+
+  /**
+   * 本地高标准业务契合度二次评估与破冰话术生成器（重业务、不卡年限）
+   */
+  localEvaluateAndDraft(jobTitle, jdText, hadOldAiGreeting, nextCount, prevFollowupText = '', resumeAlreadySent = false) {
+    const combined = `${jobTitle} ${jdText}`;
+
+    // 1. 检查是否属于业务不咬合方向（纯硬件/嵌入式底层、纯C++安全底层、车载硬件等）
+    if (/(嵌入式|单片机|硬件测试|固件|驱动测试|车载硬件|CANoe|白盒C\+\+)/i.test(combined)) {
+      return {
+        worth_followup: false,
+        score: 55,
+        eval_reason: '岗位偏硬件/嵌入式底层业务，与我方Web/接口自动化、性能及AI测试主航道不强相关，不予二次追发',
+        followup_message: ''
+      };
+    }
+
+    // 2. 评估高优业务契合度（不卡年限，重点看 AI测试 / 自动化测试 / 接口性能 / Linux+MySQL+Docker）
+    const isAiJob = /(AI|大模型|智能体|Agent|RAG|算法测试|LLM)/i.test(combined);
+    const isAutoJob = /(自动化|Python|Playwright|Selenium|Pytest|UI测试|接口)/i.test(combined);
+    const isPerfOrBackend = /(性能|压测|JMeter|Linux|MySQL|Docker|微服务|软件测试|测试工程师)/i.test(combined);
+
+    let score = 82;
+    let reason = '业务方向与候选人Python自动化、接口/性能测试及Linux/MySQL工程底座高度吻合（豁免年限限制）';
+    if (isAiJob) {
+      score = 92;
+      reason = '核心业务涉及AI/大模型/智能体测试，与候选人RAG及Agent评测实战经历高度咬合';
+    } else if (isAutoJob) {
+      score = 88;
+      reason = '核心业务聚焦自动化与接口测试，与候选人Python+Playwright+Pytest+JMeter技术栈直接匹配';
+    } else if (!isPerfOrBackend) {
+      return {
+        worth_followup: false,
+        score: 68,
+        eval_reason: '岗位业务特征不明显，未达二次严选 80 分标准，跳过追发',
+        followup_message: ''
+      };
+    }
+
+    // 3. 按跟进轮次、是否已发过简历与岗位业务定制 18~40 字真人极简破冰话术
+    const askResumeSuffix = resumeAlreadySent ? '有需要随时找我聊聊~' : '我可以把简历发您看看吗？';
+    let msg = '';
+    if (nextCount === 1) {
+      if (isAiJob) {
+        msg = `看咱们岗位涉及AI应用落地，我近期主做RAG和智能体评测，${askResumeSuffix}`;
+      } else if (hadOldAiGreeting) {
+        msg = `补充下，我平时主力也是做Python接口/UI自动化和JMeter压测的，${askResumeSuffix}`;
+      } else if (isAutoJob) {
+        msg = `看咱们这边主做自动化和接口测试，我一直用Python+Playwright做这块，${askResumeSuffix}`;
+      } else {
+        msg = `看咱们岗位的业务方向很匹配，我熟悉Python自动化、接口压测和Linux/MySQL，${askResumeSuffix}`;
+      }
+    } else {
+      // 第 2 次追发：换角度突出到岗时间与全栈工程落地能力，绝不与第 1 次重复
+      msg = '目前在职交接很快，一周左右就能到岗，自动化框架和性能压测都能独立上手，有需要随时找我聊聊~';
+      if (prevFollowupText && prevFollowupText.includes('一周左右')) {
+        msg = `这边Web/接口自动化和Linux/Docker环境测试都一直在做，如果岗位还在看人，${askResumeSuffix}`;
+      }
+    }
+
+    return {
+      worth_followup: true,
+      score,
+      eval_reason: reason,
+      followup_message: msg
     };
   }
 }

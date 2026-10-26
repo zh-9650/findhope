@@ -198,7 +198,8 @@ export class ChatEngine {
     const hrRecentText = substantiveMsgs.filter(m => m.sender_type === 'HR').slice(-3).map(m => m.content).join(' ');
     const jobTitleText = ctx.posting ? (ctx.posting.job_title || '') : '';
     const companyText = ctx.conversation.company_name || '';
-    const combinedCheckText = `${jobTitleText} ${companyText} ${hrRecentText}`;
+    const combinedCheckText = `${jobTitleText} ${companyText} ${hrRecentText}`
+      .replace(/(非|不|不是|拒绝|无)(外包|派遣|驻场|外派)/g, '');
 
     if (config.candidateProfile.blacklistKeywords && config.candidateProfile.blacklistKeywords.length > 0) {
       const hitKw = config.candidateProfile.blacklistKeywords.find(kw => combinedCheckText.includes(kw));
@@ -308,7 +309,13 @@ ${historyFormatted}
   }
 }`;
 
-    const decision = await this.runner.invokeReasoning(prompt, "CHAT_DECISION");
+    let decision = null;
+    try {
+      decision = await this.runner.invokeReasoning(prompt, "CHAT_DECISION", 35000);
+    } catch (err) {
+      this.db.logEvent("CHAT_ENGINE", `模型网关响应超时或繁忙，启用本地高可靠规则智脑生成极简回复: ${err.message.split('\n')[0]}`, "WARN");
+      decision = this.buildFallbackDecision(ctx, lastSubstantive.content);
+    }
 
     // 防重保险：若已发过简历，强制将 SEND_RESUME 降级为 SEND_REPLY
     if (ctx.conversation.send_resume_status === 'COMPLETED' && decision.action_request === 'SEND_RESUME') {
@@ -361,6 +368,61 @@ ${historyFormatted}
        skipped: false,
       decision,
       actionIntent
+    };
+  }
+
+  /**
+   * 当局域网模型网关拥塞超时时的本地确定性极简回复兜底器
+   */
+  buildFallbackDecision(ctx, hrText) {
+    const text = (hrText || '').trim();
+    const canSendResume = ctx.conversation.send_resume_status !== 'COMPLETED';
+    const canExchangeWechat = ctx.conversation.exchange_wechat_status === 'AVAILABLE';
+
+    if (/(微信|加个v|加v|vx)/i.test(text) && canExchangeWechat) {
+      return {
+        hr_intent: 'REQUEST_WECHAT',
+        action_request: 'EXCHANGE_WECHAT',
+        draft_reply: '好的，微信发您了',
+        decision_rationale: 'HR 请求交换微信，触发 EXCHANGE_WECHAT 并转人工接管',
+        updated_commitments: { wechat_exchanged: true }
+      };
+    }
+
+    if (/(简历|看新机会|考虑|聊一聊|聊聊|深聊)/.test(text) && canSendResume) {
+      return {
+        hr_intent: 'REQUEST_RESUME',
+        action_request: 'SEND_RESUME',
+        draft_reply: '考虑的，简历发您了，您看下',
+        decision_rationale: 'HR 邀约沟通或索要简历，极简回复并投递附件简历',
+        updated_commitments: { resume_sent: true }
+      };
+    }
+
+    const parts = [];
+    if (/(在职|离职|状态|到岗|入职)/.test(text)) parts.push('目前在职，交接快一周左右能到岗');
+    if (/(学历|统招|本科|专升本)/.test(text)) parts.push('全日制专升本');
+    if (/(薪资|待遇|期望|目前多少)/.test(text)) parts.push('目前4.5k，期望8-10k（最低8k）');
+    if (/(原因|为什么看|换工作)/.test(text)) parts.push('现在这边薪资偏低且涨薪受限，想换个发展空间更匹配的团队');
+
+    if (parts.length > 0) {
+      return {
+        hr_intent: 'INQUIRY',
+        action_request: canSendResume && text.includes('简历') ? 'SEND_RESUME' : 'SEND_REPLY',
+        draft_reply: parts.join('，'),
+        decision_rationale: '按候选人真实画像直给干货回答',
+        updated_commitments: {}
+      };
+    }
+
+    return {
+      hr_intent: 'INQUIRY',
+      action_request: canSendResume ? 'SEND_RESUME' : 'SEND_REPLY',
+      draft_reply: canSendResume
+        ? '考虑的，我平时主要做Python自动化和接口/性能测试，简历发您看下'
+        : '目前在职，一周左右能到岗，有需要随时沟通~',
+      decision_rationale: '通用极简真人回复兜底',
+      updated_commitments: {}
     };
   }
 }

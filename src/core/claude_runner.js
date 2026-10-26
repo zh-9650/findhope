@@ -6,15 +6,16 @@ export class ClaudeRunner {
     this.cliPath = options.cliPath || config.claudeCliPath;
     this.baseUrl = options.baseUrl || config.anthropicBaseUrl;
     this.authToken = options.authToken || config.anthropicAuthToken;
-    this.model = options.model || config.anthropicModel;
+    this.model = (options.model || config.anthropicModel || 'cangjie-code').replace(/\[1m\]/i, '');
     this.timeoutMs = options.timeoutMs || 180000; // 默认 3 分钟 (180s)，保障深度推理与大上下文稳定完成
   }
 
   /**
    * 调用 Claude CLI 执行纯推理，返回严格的结构化 JSON 对象
    */
-  async invokeReasoning(prompt, expectedDecisionType = "JOB_ASSESSMENT") {
-    const systemInstruction = `你是一个结构化纯决策引擎。严格依据提供的数据进行客观分析，严禁编造事实。必须且只能输出一段严格合法的 JSON 对象，不要输出任何 markdown 格式化标记（如 \`\`\`json ）、前言或结语。注意：JSON 字符串值内部如需引用文字，必须使用中文书名号或括号（如【...】或『...』），严禁在字符串值内部直接使用未转义的英文双引号 "！`;
+  async invokeReasoning(prompt, expectedDecisionType = "JOB_ASSESSMENT", customTimeoutMs = null) {
+    const effectiveTimeout = customTimeoutMs || this.timeoutMs;
+    const systemInstruction = `你是一个结构化纯决策引擎。严格依据提供的数据进行客观分析，严禁编造事实。必须且只能输出一段严格合法的 JSON 对象，不要输出任何 markdown 格式化标记（如 \`\`\`json ）、前言或结语。注意：JSON 字符串值内部如需引用文字，必须使用中文书名号或括号（如【...】或『...』），严禁在字符串值内部使用英文双引号！`;
     const fullPrompt = `${systemInstruction}\n\n${prompt}`;
 
     const env = {
@@ -26,7 +27,7 @@ export class ClaudeRunner {
 
     return new Promise((resolve, reject) => {
       let isDone = false;
-      const child = spawn(this.cliPath, ['-p', fullPrompt, '--model', this.model], {
+      const child = spawn(this.cliPath, ['-p', fullPrompt, '--model', this.model, '--tools', ''], {
         env,
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -38,9 +39,9 @@ export class ClaudeRunner {
         if (!isDone) {
           isDone = true;
           child.kill('SIGKILL');
-          reject(new Error(`ClaudeRunner execution timed out after ${this.timeoutMs}ms`));
+          reject(new Error(`ClaudeRunner execution timed out after ${effectiveTimeout}ms`));
         }
-      }, this.timeoutMs);
+      }, effectiveTimeout);
 
       child.stdout.on('data', (d) => stdout += d.toString());
       child.stderr.on('data', (d) => stderr += d.toString());

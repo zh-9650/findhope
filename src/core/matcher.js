@@ -13,10 +13,15 @@ export class JobMatcher {
     const { posting_id, job_title, company_name, plain_salary, jd_text, hr_active_tag, is_active_within_3days } = postingWithSnapshot;
 
     // --- Level 1: 本地硬规则过滤 ---
-    // 1.1 黑名单关键词过滤 (如外包、派遣、驻场)
+    // 1.1 黑名单关键词过滤 (如外包、派遣、驻场；先剔除“非外包/不外包/不驻场”等否定表述防止误伤)
+    const sanitizeNegated = (s) => (s || '').replace(/(非|不|不是|拒绝|无)(外包|派遣|驻场|外派)/g, '');
+    const cleanTitle = sanitizeNegated(job_title);
+    const cleanJd = sanitizeNegated(jd_text);
+    const cleanComp = sanitizeNegated(company_name);
+
     if (candidateProfile.blacklistKeywords && candidateProfile.blacklistKeywords.length > 0) {
       for (const kw of candidateProfile.blacklistKeywords) {
-        if (job_title.includes(kw) || jd_text.includes(kw) || company_name.includes(kw)) {
+        if (cleanTitle.includes(kw) || cleanJd.includes(kw) || cleanComp.includes(kw)) {
           const res = {
             assessment_id: `ASM_${posting_id}_v${configVersion}`,
             posting_id,

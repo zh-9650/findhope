@@ -444,7 +444,8 @@ export class ChatSync {
    * 按 (companyName + hrName) 动态定位并点击左侧联系人卡片，校验右侧顶栏无误后提取详情
    * 彻底杜绝因列表动态重排导致的下标移位点错人问题！
    */
-  async openAndInspectConversation(targetItem, conversationId) {
+  async openAndInspectConversation(targetItem, conversationId = null) {
+    const resolvedConvId = conversationId || targetItem.convId || ChatSync.buildConversationId(targetItem.companyName, targetItem.hrName);
     const actionBody = `
       const clicked = await page.evaluate((target) => {
         const items = Array.from(document.querySelectorAll("li[role='listitem']"));
@@ -480,6 +481,6 @@ export class ChatSync {
       throw new Error(`在左侧列表中未找到匹配的联系人卡片: ${targetItem.companyName} - ${targetItem.hrName}`);
     }
 
-    return await this.inspectCurrentChat(conversationId, targetItem);
+    return await this.inspectCurrentChat(resolvedConvId, targetItem);
   }
 }
