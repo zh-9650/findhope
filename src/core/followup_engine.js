@@ -62,8 +62,16 @@ export class FollowupEngine {
       const currentStatus = conv.followup_status || 'PENDING';
       const currentCount = conv.followup_count || 0;
 
-      // 已终态（无结果放弃 / 评估不值得追发）的直接跳过
-      if (currentStatus === 'NO_RESPONSE' || currentStatus === 'NOT_WORTH_FOLLOWUP') {
+      // 强阻断 1：凡是存在拒信记录（包括待HR回复细化、已收集原因等），100% 严禁作为已读未回进行二次评估与追发
+      if (this.db.getRejectionFeedback(item.convId)) {
+        if (conv.followup_status !== 'REJECTED_EXCLUDED') {
+          this.db.updateConversationFollowup(item.convId, { followup_status: 'REJECTED_EXCLUDED' });
+        }
+        continue;
+      }
+
+      // 已终态（无结果放弃 / 评估不值得追发 / 拒绝已排除）的直接跳过
+      if (currentStatus === 'NO_RESPONSE' || currentStatus === 'NOT_WORTH_FOLLOWUP' || currentStatus === 'REJECTED_EXCLUDED') {
         continue;
       }
 

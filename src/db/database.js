@@ -537,8 +537,11 @@ export class AgentDatabase {
     const unknownActions = this.db.prepare(`SELECT COUNT(*) as c FROM action_attempts WHERE status = 'UNKNOWN'`).get().c;
     const rejectionCount = this.db.prepare(`SELECT COUNT(*) as c FROM rejection_feedbacks`).get().c;
     const followupPoolCount = this.db.prepare(`
-      SELECT COUNT(*) as c FROM conversations
-      WHERE followup_count > 0 OR followup_status IN ('WAITING_HR', 'NO_RESPONSE', 'NOT_WORTH_FOLLOWUP', 'HR_REPLIED')
+      SELECT COUNT(*) as c FROM conversations c
+      LEFT JOIN rejection_feedbacks rf ON c.conversation_id = rf.conversation_id
+      WHERE rf.conversation_id IS NULL AND (
+        c.followup_count > 0 OR c.followup_status IN ('WAITING_HR', 'NO_RESPONSE', 'NOT_WORTH_FOLLOWUP', 'HR_REPLIED')
+      )
     `).get().c;
 
     return {
@@ -605,10 +608,13 @@ export class AgentDatabase {
         GROUP BY posting_id
       ) s ON c.posting_id = s.posting_id
       LEFT JOIN opportunities o ON c.posting_id = o.posting_id
-      WHERE c.followup_count > 0
-         OR c.followup_status IN ('WAITING_HR', 'NO_RESPONSE', 'NOT_WORTH_FOLLOWUP', 'HR_REPLIED')
-         OR c.last_message_text LIKE '[已读]%'
-         OR c.last_message_text LIKE '[送达]%'
+      LEFT JOIN rejection_feedbacks rf ON c.conversation_id = rf.conversation_id
+      WHERE rf.conversation_id IS NULL AND (
+        c.followup_count > 0
+        OR c.followup_status IN ('WAITING_HR', 'NO_RESPONSE', 'NOT_WORTH_FOLLOWUP', 'HR_REPLIED')
+        OR c.last_message_text LIKE '[已读]%'
+        OR c.last_message_text LIKE '[送达]%'
+      )
       GROUP BY c.conversation_id
       ORDER BY c.updated_at DESC
       LIMIT 60

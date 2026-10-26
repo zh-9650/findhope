@@ -194,7 +194,10 @@ export class ChatSync {
 
       const dbConv = this.db.db.prepare(`SELECT * FROM conversations WHERE conversation_id = ?`).get(convId);
       const rejectRecord = this.db.getRejectionFeedback(convId);
-      if (rejectRecord) continue;
+      if (rejectRecord) {
+        this.db.updateConversationFollowup(convId, { followup_status: 'REJECTED_EXCLUDED' });
+        continue;
+      }
 
       if (dbConv && dbConv.memory_ledger && dbConv.memory_ledger.includes('REJECTED_BY_RULE')) continue;
 
