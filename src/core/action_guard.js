@@ -159,6 +159,8 @@ export class ActionGuard {
             if (!resumeBtn || resumeBtn.classList.contains('unable') || !!resumeBtn.closest('.unable')) {
               return false;
             }
+            resumeBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            resumeBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
             resumeBtn.click();
             return true;
           });
@@ -166,12 +168,27 @@ export class ActionGuard {
           if (clickedBtn) {
             await page.waitForTimeout(1500);
             const confirmed = await page.evaluate(() => {
+              // 优先查找 BOSS 直聘的 panel-resume / sentence-popover 浮层
+              const panel = document.querySelector('.panel-resume, .sentence-popover, .boss-dialog, .dialog-container');
+              if (panel) {
+                const sureBtn = panel.querySelector('.btn-sure-v2') || Array.from(panel.querySelectorAll('span, button')).find(b => b.innerText && b.innerText.trim() === '确定');
+                if (sureBtn) {
+                  sureBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                  sureBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                  sureBtn.click();
+                  return true;
+                }
+              }
+
+              // 备选通用确认按钮
               const allBtns = Array.from(document.querySelectorAll('button, .btn, .dialog-footer button, span, div'));
               const confirmBtn = allBtns.find(b => {
                 const t = b.innerText ? b.innerText.trim() : '';
                 return (t === '确定' || t === '发送附件简历' || t === '确认') && b.offsetParent !== null;
               });
               if (confirmBtn) {
+                confirmBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                confirmBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                 confirmBtn.click();
                 return true;
               }
