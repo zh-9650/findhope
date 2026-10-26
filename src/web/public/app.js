@@ -1,5 +1,7 @@
 let currentTab = 'approvals';
 let allPostingsCache = [];
+let modelPresetsCache = [];
+let activePresetId = null;
 
 async function fetchStatus() {
   try {
@@ -256,7 +258,10 @@ async function loadFollowups() {
   }
 }
 
-// --- 模型选择逻辑 ---
+// ==========================================
+// AI 多模型、多 Key、独立网关预设池系统
+// ==========================================
+
 function onModelSelectChange(val) {
   const customInput = document.getElementById('cfgModelCustom');
   if (val === 'custom') {
@@ -269,58 +274,238 @@ function onModelSelectChange(val) {
   }
 }
 
-async function refreshGatewayModels(selectModel = null) {
-  const select = document.getElementById('cfgModelSelect');
-  const tag = document.getElementById('activeModelTag');
-  if (!select) return;
-
-  try {
-    const res = await fetch('/api/models');
-    const data = await res.json();
-    if (data.models && data.models.length > 0) {
-      const active = selectModel || data.activeModel || 'cangjie-agent';
-      if (tag) tag.innerText = `当前生效: ${active}`;
-
-      let html = '';
-      let found = false;
-      for (const m of data.models) {
-        const isSel = (m === active);
-        if (isSel) found = true;
-        let label = m;
-        if (m === 'cangjie-agent') label = 'cangjie-agent (推荐 / 稳定畅通)';
-        else if (m === 'cangjie-code') label = 'cangjie-code (注意: 易受Token配额限制)';
-        html += `<option value="${m}" ${isSel ? 'selected' : ''}>${label}</option>`;
-      }
-
-      const customInput = document.getElementById('cfgModelCustom');
-      if (!found && active) {
-        html += `<option value="${active}" selected>${active} (当前配置)</option>`;
-      }
-      html += `<option value="custom">✍️ 手动输入自定义模型名称...</option>`;
-      select.innerHTML = html;
-
-      if (customInput) customInput.style.display = 'none';
-    }
-  } catch (err) {
-    console.error('拉取网关模型列表失败:', err);
+function toggleKeyVisibility() {
+  const keyInput = document.getElementById('cfgModelApiKey');
+  const btn = document.getElementById('btnToggleKey');
+  if (!keyInput) return;
+  if (keyInput.type === 'password') {
+    keyInput.type = 'text';
+    if (btn) btn.innerText = '🙈';
+  } else {
+    keyInput.type = 'password';
+    if (btn) btn.innerText = '👁️';
   }
 }
+
+function fillPresetForm(preset) {
+  if (!preset) return;
+  if (document.getElementById('cfgPresetName')) document.getElementById('cfgPresetName').value = preset.preset_name || '';
+  if (document.getElementById('cfgModelBaseUrl')) document.getElementById('cfgModelBaseUrl').value = preset.base_url || '';
+  if (document.getElementById('cfgModelApiKey')) document.getElementById('cfgModelApiKey').value = preset.api_key_raw || preset.api_key || '';
+  if (document.getElementById('cfgModelTimeout')) document.getElementById('cfgModelTimeout').value = preset.timeout_seconds || 180;
+
+  const select = document.getElementById('cfgModelSelect');
+  const customInput = document.getElementById('cfgModelCustom');
+  const targetModel = preset.model_name || 'cangjie-agent';
+
+  let found = false;
+  if (select) {
+    for (const opt of select.options) {
+      if (opt.value === targetModel) {
+        select.value = targetModel;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      select.value = 'custom';
+      if (customInput) {
+        customInput.style.display = 'block';
+        customInput.value = targetModel;
+      }
+    } else {
+      if (customInput) customInput.style.display = 'none';
+    }
+  }
+}
+
+async function loadModelPresets(selectPresetId = null) {
+  try {
+    const res = await fetch('/api/model-presets');
+    const data = await res.json();
+    modelPresetsCache = data.presets || [];
+
+    const select = document.getElementById('cfgPresetSelect');
+    const tag = document.getElementById('activeModelTag');
+
+    if (data.currentRuntime && tag) {
+      tag.innerText = `当前生效: ${data.currentRuntime.activeModel}`;
+    }
+
+    if (!select) return;
+
+    if (modelPresetsCache.length === 0) {
+      select.innerHTML = '<option value="">(暂无保存的预设)</option>';
+      return;
+    }
+
+    let activePreset = modelPresetsCache.find(p => p.is_active === 1) || modelPresetsCache[0];
+    if (selectPresetId) {
+      const target = modelPresetsCache.find(p => p.preset_id === selectPresetId);
+      if (target) activePreset = target;
+    }
+    activePresetId = activePreset ? activePreset.preset_id : null;
+
+    select.innerHTML = modelPresetsCache.map(p => {
+      const isCur = (p.preset_id === activePresetId);
+      const activeTag = p.is_active ? ' [🟢当前生效]' : '';
+      return `<option value="${p.preset_id}" ${isCur ? 'selected' : ''}>${p.preset_name} (${p.model_name})${activeTag}</option>`;
+    }).join('');
+
+    fillPresetForm(activePreset);
+  } catch (err) {
+    console.error('加载模型预设失败:', err);
+  }
+}
+
+function onPresetSelectChange(presetId) {
+  activePresetId = presetId;
+  const p = modelPresetsCache.find(item => item.preset_id === presetId);
+  if (p) {
+    fillPresetForm(p);
+  }
+}
+
+async function activateSelectedPreset() {
+  const select = document.getElementById('cfgPresetSelect');
+  const presetId = select ? select.value : activePresetId;
+  if (!presetId) {
+    alert('请先选择一个预设');
+    return;
+  }
+
+  const res = await fetch(`/api/model-presets/${presetId}/activate`, { method: 'POST' });
+  const data = await res.json();
+  if (data.success) {
+    const tag = document.getElementById('activeModelTag');
+    if (tag && data.preset) {
+      tag.innerText = `当前生效: ${data.preset.model_name}`;
+    }
+    alert(`🎉 已成功激活预设 [${data.preset.preset_name}]！模型切换为 [${data.preset.model_name}]，对应网关与 Key 已热生效并回写 .env！`);
+    loadModelPresets(presetId);
+    fetchStatus();
+  } else {
+    alert('激活失败: ' + (data.error || '未知错误'));
+  }
+}
+
+async function deleteCurrentPreset() {
+  const select = document.getElementById('cfgPresetSelect');
+  const presetId = select ? select.value : activePresetId;
+  if (!presetId) return;
+
+  if (presetId === 'preset_cangjie_agent') {
+    alert('默认推荐预设不支持删除');
+    return;
+  }
+
+  if (!confirm('确定要删除当前选中的预设配置吗？')) return;
+
+  const res = await fetch(`/api/model-presets/${presetId}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.success) {
+    alert('预设已删除');
+    loadModelPresets();
+  }
+}
+
+async function saveAsNewPreset() {
+  const selVal = document.getElementById('cfgModelSelect').value;
+  const customVal = document.getElementById('cfgModelCustom').value.trim();
+  const model_name = (selVal === 'custom' && customVal) ? customVal : selVal;
+  const base_url = document.getElementById('cfgModelBaseUrl').value.trim();
+  const api_key = document.getElementById('cfgModelApiKey').value.trim();
+  const timeout_seconds = parseInt(document.getElementById('cfgModelTimeout').value, 10) || 180;
+  const currentName = document.getElementById('cfgPresetName').value.trim();
+
+  const newName = prompt('请输入新预设的别名 (例如: 备用MiniMax专线 / 官方Claude):', currentName ? `${currentName} (副本)` : `${model_name}-配置`);
+  if (!newName) return;
+
+  const payload = {
+    preset_id: `preset_${Date.now()}`,
+    preset_name: newName,
+    model_name,
+    base_url,
+    api_key,
+    timeout_seconds,
+    is_active: 0
+  };
+
+  const res = await fetch('/api/model-presets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (data.success) {
+    alert(`🎉 新预设 [${newName}] 已保存至预设库！`);
+    loadModelPresets(payload.preset_id);
+  } else {
+    alert('保存预设失败: ' + (data.error || '未知错误'));
+  }
+}
+
+async function testConnection() {
+  const btn = document.getElementById('btnTestConn');
+  const box = document.getElementById('connTestBox');
+  if (!btn || !box) return;
+
+  const selVal = document.getElementById('cfgModelSelect').value;
+  const customVal = document.getElementById('cfgModelCustom').value.trim();
+  const model = (selVal === 'custom' && customVal) ? customVal : selVal;
+  const baseUrl = document.getElementById('cfgModelBaseUrl').value.trim();
+  const apiKey = document.getElementById('cfgModelApiKey').value.trim();
+
+  btn.disabled = true;
+  btn.innerText = '⏳ 正在检测...';
+  box.style.display = 'block';
+  box.style.background = '#1e293b';
+  box.style.border = '1px solid #475569';
+  box.style.color = '#cbd5e1';
+  box.innerHTML = '正在向接口网关发起测试探针，请稍候...';
+
+  try {
+    const res = await fetch('/api/models/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl, apiKey, model })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      box.style.background = '#064e3b';
+      box.style.border = '1px solid #10b981';
+      box.style.color = '#a7f3d0';
+      box.innerHTML = `<strong>✅ 连通性测试通过！</strong> [耗时: ${data.latencyMs}ms] 网关运行正常，探针识别到 ${data.models?.length || 0} 个可用模型通道。`;
+    } else {
+      box.style.background = '#450a0a';
+      box.style.border = '1px solid #ef4444';
+      box.style.color = '#fecaca';
+      box.innerHTML = `<strong>❌ 连通性测试失败：</strong> ${data.message || '网关不可达或鉴权无效'}`;
+    }
+  } catch (err) {
+    box.style.background = '#450a0a';
+    box.style.border = '1px solid #ef4444';
+    box.style.color = '#fecaca';
+    box.innerHTML = `<strong>❌ 请求失败：</strong> ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.innerText = '⚡ 测试此配置连通性';
+  }
+}
+
+// ==========================================
+// 求职者画像与全量配置加载/保存
+// ==========================================
 
 async function loadConfig() {
   try {
     const res = await fetch('/api/config');
     const data = await res.json();
     const c = data.config || {};
-    const ms = data.modelSettings || {};
 
-    // 回填模型与网关设置
-    if (document.getElementById('cfgModelBaseUrl')) {
-      document.getElementById('cfgModelBaseUrl').value = ms.baseUrl || 'http://192.168.31.86:30247';
-    }
-    const currentModel = ms.activeModel || 'cangjie-agent';
-    const tag = document.getElementById('activeModelTag');
-    if (tag) tag.innerText = `当前生效: ${currentModel}`;
-    await refreshGatewayModels(currentModel);
+    // 载入模型预设系统
+    await loadModelPresets();
 
     // 回填求职者画像设置
     document.getElementById('cfgName').value = c.name || '';
@@ -351,6 +536,9 @@ async function saveConfig(e) {
   const customVal = document.getElementById('cfgModelCustom') ? document.getElementById('cfgModelCustom').value.trim() : '';
   const chosenModel = (selVal === 'custom' && customVal) ? customVal : selVal;
   const baseUrl = document.getElementById('cfgModelBaseUrl') ? document.getElementById('cfgModelBaseUrl').value.trim() : 'http://192.168.31.86:30247';
+  const apiKey = document.getElementById('cfgModelApiKey') ? document.getElementById('cfgModelApiKey').value.trim() : '';
+  const timeoutSeconds = document.getElementById('cfgModelTimeout') ? parseInt(document.getElementById('cfgModelTimeout').value, 10) : 180;
+  const presetName = document.getElementById('cfgPresetName') ? document.getElementById('cfgPresetName').value.trim() : '当前活跃配置';
 
   const candidateProfile = {
     name: document.getElementById('cfgName').value.trim(),
@@ -374,9 +562,28 @@ async function saveConfig(e) {
     candidateProfile,
     modelSettings: {
       activeModel: chosenModel,
-      baseUrl
+      baseUrl,
+      apiKey,
+      timeoutSeconds
     }
   };
+
+  // 同步更新保存当前预设
+  if (activePresetId) {
+    await fetch('/api/model-presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        preset_id: activePresetId,
+        preset_name: presetName,
+        model_name: chosenModel,
+        base_url: baseUrl,
+        api_key: apiKey,
+        timeout_seconds: timeoutSeconds,
+        is_active: 1
+      })
+    });
+  }
 
   const res = await fetch('/api/config', {
     method: 'POST',
@@ -390,7 +597,8 @@ async function saveConfig(e) {
     if (tag && data.modelSettings) {
       tag.innerText = `当前生效: ${data.modelSettings.activeModel}`;
     }
-    alert(`🎉 配置保存成功！AI 决策模型已切换为 [${chosenModel}] 并热更新生效！`);
+    alert(`🎉 全套配置保存成功！\n模型 [${chosenModel}]、网关 [${baseUrl}] 与 API Key 已全面热更新并写入 .env！`);
+    loadModelPresets(activePresetId);
   } else {
     alert('保存失败，请检查网络或日志');
   }
@@ -402,7 +610,6 @@ async function toggleScheduler() {
   const res = await fetch('/api/control/toggle', { method: 'POST' });
   const data = await res.json();
   await fetchStatus();
-  // 当用户点击“暂停/停止”时，自动跳转到【被拒原因收集与复盘】标签页展示分析结果
   if (data.isPaused || !data.isRunning) {
     switchTab('rejections');
   }
