@@ -604,12 +604,17 @@ export class AgentDatabase {
       SELECT c.*, p.job_title, p.list_salary_raw, s.plain_salary, o.stage as opp_stage
       FROM conversations c
       LEFT JOIN postings p ON c.posting_id = p.posting_id
-      LEFT JOIN posting_snapshots s ON c.posting_id = s.posting_id
+      LEFT JOIN (
+        SELECT posting_id, plain_salary, MAX(snapshot_id)
+        FROM posting_snapshots
+        GROUP BY posting_id
+      ) s ON c.posting_id = s.posting_id
       LEFT JOIN opportunities o ON c.posting_id = o.posting_id
       WHERE c.followup_count > 0
          OR c.followup_status IN ('WAITING_HR', 'NO_RESPONSE', 'NOT_WORTH_FOLLOWUP', 'HR_REPLIED')
          OR c.last_message_text LIKE '[已读]%'
          OR c.last_message_text LIKE '[送达]%'
+      GROUP BY c.conversation_id
       ORDER BY c.updated_at DESC
       LIMIT 60
     `).all();

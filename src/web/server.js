@@ -220,8 +220,14 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
       const rows = db.db.prepare(`
         SELECT p.*, s.plain_salary, s.hr_active_tag, a.decision, a.match_score, a.reason, a.filter_stage
         FROM postings p
-        LEFT JOIN posting_snapshots s ON p.posting_id = s.posting_id
+        LEFT JOIN (
+          SELECT posting_id, plain_salary, hr_active_tag, MAX(snapshot_id)
+          FROM posting_snapshots
+          GROUP BY posting_id
+        ) s ON p.posting_id = s.posting_id
         LEFT JOIN assessments a ON p.posting_id = a.posting_id
+        WHERE p.company_name IS NOT NULL AND TRIM(p.company_name) != ''
+        GROUP BY p.posting_id
         ORDER BY p.updated_at DESC
         LIMIT ?
       `).all(limit);

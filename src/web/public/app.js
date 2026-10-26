@@ -91,7 +91,14 @@ async function loadPostings() {
   try {
     const res = await fetch('/api/postings?limit=60');
     const data = await res.json();
-    allPostingsCache = data.postings || [];
+    const rawList = data.postings || [];
+    const map = new Map();
+    for (const p of rawList) {
+      if (p.posting_id && !map.has(p.posting_id)) {
+        map.set(p.posting_id, p);
+      }
+    }
+    allPostingsCache = Array.from(map.values());
     renderPostings(allPostingsCache);
   } catch (err) {
     console.error('加载职位池失败:', err);
@@ -206,7 +213,14 @@ async function loadFollowups() {
       descEl.innerText = `当前生效配置：每 ${data.config.followupIntervalMinutes} 分钟定时扫描一轮已读未回/送达会话，按业务契合度（≥${data.config.followupMinScore}分，不卡年限）二次评估并定制破冰追发；连续 ${data.config.maxFollowupCount} 次扫描未回自动放弃并标记“无结果”`;
     }
 
-    const list = data.conversations || [];
+    const rawList = data.conversations || [];
+    const map = new Map();
+    for (const c of rawList) {
+      if (c.conversation_id && !map.has(c.conversation_id)) {
+        map.set(c.conversation_id, c);
+      }
+    }
+    const list = Array.from(map.values());
     if (list.length === 0) {
       tbody.innerHTML = '<tr><td colspan="6" class="empty-tip">暂无处于已读未回/送达跟进池中的会话</td></tr>';
       return;
