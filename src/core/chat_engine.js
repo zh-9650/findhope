@@ -89,111 +89,6 @@ export class ChatEngine {
       });
     }
 
-    // 2.5 【被拒原因收集阶段二】：若此前我方已追问过被拒原因 (status === 'ASKING_REASON')，且 HR 最新回复了原因
-    if (existingFeedback && existingFeedback.status === 'ASKING_REASON') {
-      const hrReplyText = lastSubstantive.content.trim();
-      let category = 'HR已回复具体原因';
-      if (/(AI|大模型|智能体|方向|岗位)/i.test(hrReplyText)) category = '求职方向/招呼语不符(偏AI测试)';
-      else if (/(年|经验|资深|高工)/.test(hrReplyText)) category = '工作年限要求差距';
-      else if (/(学历|统招|专升本|一本|211|985|学信网)/.test(hrReplyText)) category = '学历门槛限制';
-      else if (/(金融|证券|银行|硬件|嵌入式|安全|游戏|车载|行业|业务)/.test(hrReplyText)) category = '行业/业务背景不符';
-      else if (/(招满|暂停|HC|周期|急)/.test(hrReplyText)) category = 'HC变动或项目周期原因';
-
-      this.db.upsertRejectionFeedback({
-        conversation_id: conversationId,
-        hr_reason_reply: hrReplyText,
-        inferred_category: category,
-        status: 'COLLECTED'
-      });
-
-      if (ctx.conversation.posting_id) {
-        this.db.createOrUpdateOpportunity({
-          posting_id: ctx.conversation.posting_id,
-          conversation_id: conversationId,
-          stage: 'CLOSED',
-          notes: `已收集HR被拒原因反馈: [${category}] ${hrReplyText}`
-        });
-      }
-
-      const thankReply = '明白了，感谢您的真实反馈，祝招聘顺利~';
-      const decision = {
-        hr_intent: 'REJECTION_REASON',
-        action_request: 'SEND_REPLY',
-        draft_reply: thankReply,
-        decision_rationale: `HR 已回复被拒原因（${hrReplyText}），已自动归档至被拒原因库并礼貌致谢收尾`
-      };
-
-      const actionIntent = this.guard.registerIntent({
-        conversation_id: conversationId,
-        posting_id: ctx.conversation.posting_id,
-        action_kind: 'SEND_REPLY',
-        payload: thankReply
-      });
-
-      this.db.logEvent("CHAT_ENGINE", `【被拒原因已收集】${ctx.conversation.company_name} - ${ctx.conversation.hr_name} 反馈原因: "${hrReplyText}" (分类: ${category})`, "SUCCESS");
-
-      return {
-        conversationId,
-        skipped: false,
-        decision,
-        actionIntent
-      };
-    }
-
-    // 2.6 【被拒原因收集阶段一】：检测 HR 最新消息是否为初次拒绝/不合适表态（排除工作地点确认卡片的“暂不考虑可以接受”按钮文字）
-    const rejectRegex = /(不太合适|不合适|不推进|不同经验背景|更适合当前项目周期|匹配度还有一定差距|不太匹配|不匹配)/;
-    const isLocationCard = lastSubstantive.content.includes('您是否接受此工作地点') || lastSubstantive.content.includes('暂不考虑可以接受');
-    if (!existingFeedback && !isLocationCard && rejectRegex.test(lastSubstantive.content)) {
-      const askReasonReply = '好的理解，冒昧问下主要是年限、学历还是技术方向不太匹配呢？想做个参考，谢谢~';
-      let initialCategory = '待HR回复原因';
-      if (lastSubstantive.content.includes('项目周期')) initialCategory = '项目周期/到岗匹配度(待HR细化)';
-      else if (lastSubstantive.content.includes('经验背景') || lastSubstantive.content.includes('工作经历')) initialCategory = '经验/行业背景差距(待HR细化)';
-
-      this.db.upsertRejectionFeedback({
-        conversation_id: conversationId,
-        posting_id: ctx.conversation.posting_id,
-        company_name: ctx.conversation.company_name || '未知公司',
-        hr_name: ctx.conversation.hr_name || 'HR',
-        job_title: ctx.posting ? ctx.posting.job_title : '测试工程师',
-        hr_reject_message: lastSubstantive.content,
-        followup_question: askReasonReply,
-        inferred_category: initialCategory,
-        status: 'ASKING_REASON'
-      });
-
-      if (ctx.conversation.posting_id) {
-        this.db.createOrUpdateOpportunity({
-          posting_id: ctx.conversation.posting_id,
-          conversation_id: conversationId,
-          stage: 'REJECT_FOLLOWUP',
-          notes: `HR表示不合适("${lastSubstantive.content}")，已礼貌追问具体原因`
-        });
-      }
-
-      const decision = {
-        hr_intent: 'REJECTION',
-        action_request: 'SEND_REPLY',
-        draft_reply: askReasonReply,
-        decision_rationale: `检测到 HR 拒绝表态（${lastSubstantive.content}），触发被拒原因收集流程，礼貌追问具体原因`
-      };
-
-      const actionIntent = this.guard.registerIntent({
-        conversation_id: conversationId,
-        posting_id: ctx.conversation.posting_id,
-        action_kind: 'SEND_REPLY',
-        payload: askReasonReply
-      });
-
-      this.db.logEvent("CHAT_ENGINE", `【捕获HR拒绝并追问原因】${ctx.conversation.company_name} - ${ctx.conversation.hr_name}: "${lastSubstantive.content}" -> 已发送原因追问`, "WARN");
-
-      return {
-        conversationId,
-        skipped: false,
-        decision,
-        actionIntent
-      };
-    }
-
     // 3. 聊天岗位反向硬规则过滤（黑名单拦截：如 HR 在消息或职位中明确提到“外包/派遣/驻场”）
     const hrRecentText = substantiveMsgs.filter(m => m.sender_type === 'HR').slice(-3).map(m => m.content).join(' ');
     const jobTitleText = ctx.posting ? (ctx.posting.job_title || '') : '';
@@ -282,6 +177,19 @@ export class ChatEngine {
 4. 发简历与换微信动作触发规则：
    - 若 HR 询问是否有兴趣/索要简历，且发送附件简历按钮状态为 AVAILABLE -> action_request 输出 "SEND_RESUME"；若状态已为 COMPLETED -> 输出 "SEND_REPLY"；
    - 若 HR 索要微信或提出加微信详聊，且交换微信按钮状态为 AVAILABLE -> action_request 必须输出 "EXCHANGE_WECHAT"，回复仅需简短一句“好的，微信发您了”。
+5. HR 表达拒绝、不合适或不匹配时的铁律（严禁死缠烂打强行争取！）：
+   - 识别标志：任何形式的不合适、不太匹配、不完全匹配、招满、祝找到更合适的工作、暂不考虑、经验/背景不符合等。
+   - 严禁死缠烂打：绝对不回复“我做过xxx方便再看下吗”、“方便再考虑下我吗”、“我技术很好”等争取话术！
+   - 场景 D1（HR 首次表达拒绝，尚未说明具体原因）：
+     -> hr_intent 必须输出 "REJECTION"
+     -> action_request 必须输出 "SEND_REPLY"
+     -> draft_reply 必须输出礼貌追问原因的标准话术："好的理解，冒昧问下主要是年限、学历还是技术方向不太匹配呢？想做个参考，谢谢~"
+     -> inferred_category: 输出 "待HR回复细化"
+   - 场景 D2（HR 已经解释了具体原因，或我方追问后 HR 回复了解释原因）：
+     -> hr_intent 必须输出 "REJECTION_REASON"
+     -> action_request 必须输出 "SEND_REPLY"
+     -> draft_reply 必须输出礼貌致谢话术："明白了，感谢您的真实反馈，祝招聘顺利~"
+     -> inferred_category: 从 HR 话语中提炼归纳出的分类（如："工作年限差距" | "学历门槛限制" | "求职方向不符" | "行业/业务背景不符" | "HC已满/暂停招聘" | "其他原因"）
 
 【当前沟通岗位与公司】：
 - 公司/职位：${ctx.conversation.company_name || ''} - ${ctx.posting ? ctx.posting.job_title : '测试工程师'}
@@ -300,9 +208,10 @@ ${historyFormatted}
 
 请理解 HR 意图并仅输出以下合法 JSON（不得输出任何其他文字）：
 {
-  "hr_intent": "INQUIRY" | "REQUEST_RESUME" | "REQUEST_WECHAT" | "INTERVIEW_INVITE" | "CHITCHAT",
+  "hr_intent": "INQUIRY" | "REQUEST_RESUME" | "REQUEST_WECHAT" | "INTERVIEW_INVITE" | "REJECTION" | "REJECTION_REASON" | "CHITCHAT",
   "action_request": "NONE" | "SEND_REPLY" | "SEND_RESUME" | "EXCHANGE_WECHAT" | "CONFIRM_INTERVIEW",
   "draft_reply": "10~45字以内的真人极简中文回复（严禁AI套话、已发言严禁加您好、直给明确信息）",
+  "inferred_category": "若为被拒或原因回复则给出归纳分类，否则留空",
   "decision_rationale": "决策原因解释",
   "updated_commitments": {
     "key": "此次回复中做出的最新承诺或事实确认"
@@ -331,6 +240,54 @@ ${historyFormatted}
         action_kind: decision.action_request,
         payload: decision.draft_reply
       });
+    }
+
+    // 联动【被拒原因收集与复盘追踪】
+    if (decision.hr_intent === 'REJECTION') {
+      const category = decision.inferred_category || '待HR回复细化';
+      this.db.upsertRejectionFeedback({
+        conversation_id: conversationId,
+        posting_id: ctx.conversation.posting_id,
+        company_name: ctx.conversation.company_name || '未知公司',
+        hr_name: ctx.conversation.hr_name || 'HR',
+        job_title: ctx.posting ? ctx.posting.job_title : '测试工程师',
+        hr_reject_message: lastSubstantive.content,
+        followup_question: decision.draft_reply,
+        inferred_category: category,
+        status: 'ASKING_REASON'
+      });
+
+      if (ctx.conversation.posting_id) {
+        this.db.createOrUpdateOpportunity({
+          posting_id: ctx.conversation.posting_id,
+          conversation_id: conversationId,
+          stage: 'REJECT_FOLLOWUP',
+          notes: `Claude判定HR拒绝表态("${lastSubstantive.content}")，已自动安排追问具体原因`
+        });
+      }
+      this.db.logEvent("CHAT_ENGINE", `【Claude捕获HR拒绝并追问原因】${ctx.conversation.company_name} - ${ctx.conversation.hr_name}: "${lastSubstantive.content}" -> 输出原因追问`, "WARN");
+    } else if (decision.hr_intent === 'REJECTION_REASON') {
+      const category = decision.inferred_category || 'HR已解释具体原因';
+      this.db.upsertRejectionFeedback({
+        conversation_id: conversationId,
+        posting_id: ctx.conversation.posting_id,
+        company_name: ctx.conversation.company_name || '未知公司',
+        hr_name: ctx.conversation.hr_name || 'HR',
+        job_title: ctx.posting ? ctx.posting.job_title : '测试工程师',
+        hr_reason_reply: lastSubstantive.content,
+        inferred_category: category,
+        status: 'COLLECTED'
+      });
+
+      if (ctx.conversation.posting_id) {
+        this.db.createOrUpdateOpportunity({
+          posting_id: ctx.conversation.posting_id,
+          conversation_id: conversationId,
+          stage: 'CLOSED',
+          notes: `Claude识别HR已提供被拒原因: [${category}] ${lastSubstantive.content}`
+        });
+      }
+      this.db.logEvent("CHAT_ENGINE", `【Claude收集到HR拒绝原因】${ctx.conversation.company_name} - ${ctx.conversation.hr_name} 反馈原因: "${lastSubstantive.content}" (归类: ${category})`, "SUCCESS");
     }
 
     // 增量更新会话结构化记忆账本
@@ -378,6 +335,17 @@ ${historyFormatted}
     const text = (hrText || '').trim();
     const canSendResume = ctx.conversation.send_resume_status !== 'COMPLETED';
     const canExchangeWechat = ctx.conversation.exchange_wechat_status === 'AVAILABLE';
+
+    if (/(不太合适|不合适|不推进|不.*匹配|祝.*找到更合适|祝.*招聘顺利|暂不.*考虑)/.test(text)) {
+      return {
+        hr_intent: 'REJECTION',
+        action_request: 'SEND_REPLY',
+        draft_reply: '好的理解，冒昧问下主要是年限、学历还是技术方向不太匹配呢？想做个参考，谢谢~',
+        inferred_category: '待HR回复细化',
+        decision_rationale: '本地降级规则识别 HR 拒绝，礼貌追问原因',
+        updated_commitments: {}
+      };
+    }
 
     if (/(微信|加个v|加v|vx)/i.test(text) && canExchangeWechat) {
       return {
