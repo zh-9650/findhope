@@ -116,8 +116,13 @@ export function createWebServer(db, scheduler, rejectionAnalyzer = null) {
     }
 
     if (pathname === '/api/followups' && method === 'GET') {
+      const lastScanTime = scheduler ? scheduler.lastFollowupScanTime : 0;
+      const intervalMs = (Number(config.candidateProfile.followupIntervalMinutes) || 60) * 60 * 1000;
+      const nextScanTime = lastScanTime > 0 ? (lastScanTime + intervalMs) : 0;
       return sendJson({
         conversations: db.getFollowupConversations(),
+        lastScanTime,
+        nextScanTime,
         config: {
           followupEnabled: config.candidateProfile.followupEnabled !== false,
           followupIntervalMinutes: config.candidateProfile.followupIntervalMinutes || 60,

@@ -18,13 +18,36 @@ export class TaskScheduler {
     this.workerId = `SCHEDULER_${process.pid}_${Date.now()}`;
     this.searchKwIndex = 0;
     this.lastChatSyncTime = 0;
-    this.lastFollowupScanTime = Date.now();
+    this.lastFollowupScanTime = this.getLastFollowupScanTimeFromDb();
+  }
+
+  /**
+   * 从 SQLite 数据库真实对账上一次成功完成 FOLLOWUP_SCAN 的时间
+   * 彻底避免因服务停止/启动或进程重启导致内存计时器被刷新的问题
+   */
+  getLastFollowupScanTimeFromDb() {
+    try {
+      const row = this.db.db.prepare(`
+        SELECT updated_at FROM tasks
+        WHERE task_type = 'FOLLOWUP_SCAN' AND status = 'DONE'
+        ORDER BY updated_at DESC LIMIT 1
+      `).get();
+      if (row && row.updated_at) {
+        const normalized = row.updated_at.includes('T') ? row.updated_at : row.updated_at.replace(' ', 'T') + 'Z';
+        const ms = new Date(normalized).getTime();
+        if (!Number.isNaN(ms) && ms > 0) return ms;
+      }
+    } catch (e) {
+      // 容错处理
+    }
+    return 0;
   }
 
   start() {
     if (this.isRunning && !this.isPaused) return;
     this.isRunning = true;
     this.isPaused = false;
+    this.lastFollowupScanTime = this.getLastFollowupScanTimeFromDb();
     this.db.logEvent("SCHEDULER", `调度中枢已启动 [运行模式: ${config.executionMode}]，监听求职关键词: ${config.candidateProfile.searchKeywords.join(', ')}`, "SUCCESS");
     console.log(`[TaskScheduler] 调度中枢已启动 (Worker: ${this.workerId})`);
 
@@ -47,6 +70,7 @@ export class TaskScheduler {
 
   resume() {
     this.isPaused = false;
+    this.lastFollowupScanTime = this.getLastFollowupScanTimeFromDb();
     this.db.logEvent("SCHEDULER", `调度中枢已恢复运行，优先巡检未读会话`, "SUCCESS");
     console.log(`[TaskScheduler] 调度中枢已恢复运行`);
 
