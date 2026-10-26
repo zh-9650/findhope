@@ -39,7 +39,47 @@ export class JobMatcher {
       }
     }
 
-    // 1.2 HR 活跃度硬门槛 (若确定超时如半年前活跃，标记为 REVIEW 或 REJECT)
+    // 1.2 身份与雇佣性质硬门槛（候选人是2年经验全职社招人员，绝对严禁投递实习生、在校校招、兼职、学徒等非全职岗位）
+    const internKeywords = [
+      '实习', '实习生', 'intern', '兼职', '日结', '兼职测试', '时薪', '学徒',
+      '见习', '培训生', '管培生', '校招', '应届生', '应届', '25届', '26届', '27届', '毕业生'
+    ];
+    const matchedInternKw = internKeywords.find(kw => cleanTitle.includes(kw) || cleanJd.includes(kw));
+    if (matchedInternKw) {
+      const res = {
+        assessment_id: `ASM_${posting_id}_v${configVersion}`,
+        posting_id,
+        config_version: configVersion,
+        decision: 'REJECT',
+        match_score: 0.05,
+        matched_skills: [],
+        missing_skills: [],
+        reason: `非全职社招岗位，一票否决 (命中非正式雇佣关键词: "${matchedInternKw}")`,
+        filter_stage: 'HARD_RULE'
+      };
+      this.db.recordAssessment(res);
+      return res;
+    }
+
+    // 1.3 薪资计量单位硬门槛（排除按天、按小时计费的临时用工）
+    const rawSalary = (plain_salary || postingWithSnapshot.list_salary_raw || '').trim();
+    if (rawSalary.includes('天') || rawSalary.includes('时') || rawSalary.includes('小时')) {
+      const res = {
+        assessment_id: `ASM_${posting_id}_v${configVersion}`,
+        posting_id,
+        config_version: configVersion,
+        decision: 'REJECT',
+        match_score: 0.05,
+        matched_skills: [],
+        missing_skills: [],
+        reason: `非正式月薪制岗位，一票否决 (命中非月薪结算: "${rawSalary}")`,
+        filter_stage: 'HARD_RULE'
+      };
+      this.db.recordAssessment(res);
+      return res;
+    }
+
+    // 1.4 HR 活跃度硬门槛 (若确定超时如半年前活跃，标记为 REVIEW 或 REJECT)
     if (is_active_within_3days === 0) {
       const res = {
         assessment_id: `ASM_${posting_id}_v${configVersion}`,
@@ -60,6 +100,7 @@ export class JobMatcher {
     const prompt = `请作为求职匹配评估专家，对照候选人画像与岗位信息进行客观打分评估：
 【候选人真实画像】：
 - 姓名/学历/年限：${candidateProfile.name} (全日制专升本，${candidateProfile.yearsOfExperience}年测试工程师实战经验)
+- 求职类型：【全职社会招聘】（在职看机会，期望最低月薪${candidateProfile.salaryExpectationMin || 8}K）
 - 具备全部技能库：${candidateProfile.preferredSkills.join(', ')}
 - 详细背景：${candidateProfile.resumeSummary}
 
@@ -71,12 +112,15 @@ export class JobMatcher {
 ${jd_text}
 
 【核心评估判定红线与准则（非常重要）】：
-1. 年限容差与扣分原则：
+1. 身份与雇佣性质铁律（一票否决 REJECT）：
+   - 候选人是具备2年实战经验的全职社招工程师，只接受正式全职岗位；
+   - 严禁将任何【实习生、兼职、学生校招、无转正日薪短工】判定为 MATCH！哪怕候选人技能完全满足且远超岗位要求，也必须判定为【REJECT】（不可出现高维降打给实习生当备胎的荒谬判定）。
+2. 年限容差与扣分原则：
    - 候选人实战能力扎实，全面掌握自动化、性能测试、Linux/MySQL及微服务容器化；
-   - 若岗位要求“3年”或“3-5年”经验，严禁一票否决(REJECT)！年限差异仅作为轻度扣分项（扣5-10分）；
+   - 若社招岗位要求“3年”或“3-5年”经验，严禁一票否决(REJECT)！年限差异仅作为轻度扣分项（扣5-10分）；
    - 只要技能匹配度良好，综合得分>=0.65即必须给出【MATCH】（强烈推荐建联投递）！
    - 只有明确要求“5年以上资深 / 8-10年总监架构师”等严重跨梯队的岗位才予以 REJECT。
-2. 技能全面性认定：
+3. 技能全面性认定：
    - 候选人已全面掌握性能测试（JMeter/并发压测）、Linux/Shell、MySQL数据库、微服务Docker容器化与自动化测试；不要错误判定为“缺失上述技能”。
 
 请严格按以下 JSON Schema 输出评估结果：

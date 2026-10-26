@@ -85,7 +85,7 @@ export const config = {
     followupIntervalMinutes: 60, // 定时扫描与追发间隔（默认 60 分钟 = 1 小时）
     maxFollowupCount: 3, // 连续扫描命中多少次仍未回则放弃并标记“无结果”（默认 3 次）
     followupMinScore: 80, // 二次严选评估最低分数线（重业务契合、不卡年限，默认 80 分）
-    blacklistKeywords: ["外包", "派遣", "驻场", "客服", "销售"],
+    blacklistKeywords: ["外包", "派遣", "驻场", "客服", "销售", "实习", "兼职", "学徒", "校招", "助理"],
     preferredSkills: [
       "自动化测试", "Python", "Playwright", "Selenium", "Pytest",
       "接口测试", "Postman", "Requests", "JMeter",
