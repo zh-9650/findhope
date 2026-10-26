@@ -48,6 +48,13 @@ export class TaskScheduler {
     this.isRunning = true;
     this.isPaused = false;
     this.lastFollowupScanTime = this.getLastFollowupScanTimeFromDb();
+
+    // 启动自愈：将因进程重启/中断残留的 RUNNING 任务回滚为 QUEUED，清理死锁
+    const recovered = this.db.db.prepare(`UPDATE tasks SET status = 'QUEUED' WHERE status = 'RUNNING'`).run();
+    if (recovered.changes > 0) {
+      this.db.logEvent("SCHEDULER", `检测到 ${recovered.changes} 个因中断挂起的任务，已自动重置恢复至排队队列`, "INFO");
+    }
+
     this.db.logEvent("SCHEDULER", `调度中枢已启动 [运行模式: ${config.executionMode}]，监听求职关键词: ${config.candidateProfile.searchKeywords.join(', ')}`, "SUCCESS");
     console.log(`[TaskScheduler] 调度中枢已启动 (Worker: ${this.workerId})`);
 
