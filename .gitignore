@@ -1,0 +1,17 @@
+node_modules/
+.env
+data/*.db
+data/*.db-wal
+data/*.db-shm
+logs/
+*.log
+
+# Local credentials, runtime data, and private evidence
+.env.*
+!.env.example
+data/
+/docs/archive/
+/docs/feasibility_v1.1/
+/*.png
+/*.js
+*.zip

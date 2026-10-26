@@ -1,0 +1,23 @@
+{
+  "name": "findhope-boss-agent",
+  "version": "1.1.0",
+  "description": "BOSS Autonomous Job-Seeking Agent (Node.js ESM + SQLite + Claude CLI + Ego)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node tests/run_all_tests.js",
+    "test:db": "node tests/test_db_crash.js",
+    "test:claude": "node tests/test_claude_cli.js",
+    "test:ego": "node tests/test_ego_bridge.js"
+  },
+  "keywords": [
+    "boss-zhipin",
+    "agent",
+    "job-seeking",
+    "claude-code",
+    "ego-browser"
+  ],
+  "author": "Antigravity",
+  "license": "MIT"
+}
