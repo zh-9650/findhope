@@ -168,8 +168,8 @@ export class ActionGuard {
           if (clickedBtn) {
             await page.waitForTimeout(1500);
             const confirmed = await page.evaluate(() => {
-              // 优先查找 BOSS 直聘的 panel-resume / sentence-popover 浮层
-              const panel = document.querySelector('.panel-resume, .sentence-popover, .boss-dialog, .dialog-container');
+              // 严格限定在 BOSS 直聘的 panel-resume / sentence-popover 浮层内，绝不全局查找，防止误触换电话/换微信
+              const panel = document.querySelector('.panel-resume, .sentence-popover');
               if (panel) {
                 const sureBtn = panel.querySelector('.btn-sure-v2') || Array.from(panel.querySelectorAll('span, button')).find(b => b.innerText && b.innerText.trim() === '确定');
                 if (sureBtn) {
@@ -178,19 +178,6 @@ export class ActionGuard {
                   sureBtn.click();
                   return true;
                 }
-              }
-
-              // 备选通用确认按钮
-              const allBtns = Array.from(document.querySelectorAll('button, .btn, .dialog-footer button, span, div'));
-              const confirmBtn = allBtns.find(b => {
-                const t = b.innerText ? b.innerText.trim() : '';
-                return (t === '确定' || t === '发送附件简历' || t === '确认') && b.offsetParent !== null;
-              });
-              if (confirmBtn) {
-                confirmBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                confirmBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                confirmBtn.click();
-                return true;
               }
               return false;
             });
@@ -215,14 +202,18 @@ export class ActionGuard {
           if (clickedBtn) {
             await page.waitForTimeout(1500);
             const confirmed = await page.evaluate(() => {
-              const allBtns = Array.from(document.querySelectorAll('button, .btn, .dialog-footer button, span, div'));
-              const confirmBtn = allBtns.find(b => {
-                const t = b.innerText ? b.innerText.trim() : '';
-                return (t === '确定' || t === '确认') && b.offsetParent !== null;
-              });
-              if (confirmBtn) {
-                confirmBtn.click();
-                return true;
+              const panel = document.querySelector('.panel-weixin, .dialog-container, .boss-dialog');
+              if (panel) {
+                const confirmBtn = Array.from(panel.querySelectorAll('button, .btn, span')).find(b => {
+                  const t = b.innerText ? b.innerText.trim() : '';
+                  return (t === '确定' || t === '确认') && b.offsetParent !== null;
+                });
+                if (confirmBtn) {
+                  confirmBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                  confirmBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                  confirmBtn.click();
+                  return true;
+                }
               }
               return false;
             });
@@ -244,7 +235,7 @@ export class ActionGuard {
           textSent,
           resumeClicked,
           wechatClicked,
-          verified: verifyResult.textVerified
+          verified: verifyResult.textVerified && (context.actionKind !== 'SEND_RESUME' || verifyResult.resumeVerified)
         };
       `;
 
